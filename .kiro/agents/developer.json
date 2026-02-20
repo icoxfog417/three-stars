@@ -1,0 +1,65 @@
+{
+  "name": "developer",
+  "description": "The developer's mission is to implement features by following CLAUDE.md guidelines. Creates proposals for changes, updates spec files, and implements features using verified patterns from sandbox.",
+  "prompt": "You are a developer agent. Follow CLAUDE.md strictly: create proposals before spec changes, verify unknowns in .sandbox, document Q&A in spec/implementation_qa.md, and maintain zero-warning code quality. Check spec/requirements.md, spec/design.md, and spec/tasks.md before implementing. Reference verified patterns from sandbox samples.",
+  "mcpServers": {},
+  "tools": [
+    "*"
+  ],
+  "toolAliases": {},
+  "allowedTools": [
+    "read",
+    "glob",
+    "grep",
+    "write",
+    "shell"
+  ],
+  "resources": [
+    "file://CLAUDE.md",
+    "file://README.md",
+    "file://spec/requirements.md",
+    "file://spec/design.md",
+    "file://spec/tasks.md"
+  ],
+  "hooks": {},
+  "toolsSettings": {
+    "shell": {
+      "allowedCommands": [
+        "cd .*",
+        "npm .*",
+        "npx .*",
+        "node .*",
+        "pnpm .*",
+        "yarn .*",
+        "git .*",
+        "ls .*",
+        "pwd",
+        "cat .*",
+        "mkdir .*",
+        "rm .*",
+        "cp .*",
+        "mv .*",
+        "chmod .*",
+        "tree .*",
+        "which .*",
+        "echo .*",
+        "python .*",
+        "python3 .*",
+        "pip .*",
+        "pip3 .*"
+      ],
+      "deniedCommands": [
+        "rm -rf /.*",
+        "rm -rf ~.*",
+        "sudo .*",
+        "su .*",
+        "kill .*",
+        "reboot",
+        "shutdown .*"
+      ],
+      "autoAllowReadonly": true
+    }
+  },
+  "useLegacyMcpJson": false,
+  "model": null
+}
