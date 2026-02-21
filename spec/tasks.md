@@ -28,12 +28,12 @@
 
 ### Tasks
 
-- ⬜ T01: Create `pyproject.toml` with dependencies (click, rich, boto3, pyyaml, hatchling)
-- ⬜ T02: Create `src/three_stars/__init__.py` and package directory structure
-- ⬜ T03: Implement `cli.py` with Click command group (deploy/destroy/status/init stubs)
-- ⬜ T04: Implement `config.py` — YAML loading, validation, ProjectConfig dataclass
-- ⬜ T05: Set up `tests/` with pytest, conftest.py, and config tests
-- ⬜ T06: Set up linting (ruff) and formatting in pyproject.toml
+- ✅ T01: Create `pyproject.toml` with dependencies (click, rich, boto3, pyyaml, hatchling)
+- ✅ T02: Create `src/three_stars/__init__.py` and package directory structure
+- ✅ T03: Implement `cli.py` with Click command group (deploy/destroy/status/init stubs)
+- ✅ T04: Implement `config.py` — YAML loading, validation, ProjectConfig dataclass
+- ✅ T05: Set up `tests/` with pytest, conftest.py, and config tests
+- ✅ T06: Set up linting (ruff) and formatting in pyproject.toml
 
 ## Sprint 1: AWS Core Modules
 
@@ -42,12 +42,12 @@
 
 ### Tasks
 
-- ⬜ T07: Implement `aws/session.py` — boto3 session creation, account ID lookup
-- ⬜ T08: Implement `aws/s3.py` — bucket CRUD, directory upload with MIME types
-- ⬜ T09: Implement `aws/cloudfront.py` — distribution CRUD with OAC
-- ⬜ T10: Implement `aws/cf_function.py` — CloudFront Function CRUD with JS router template
-- ⬜ T11: Implement `aws/agentcore.py` — Runtime CRUD (adapted from toolkit patterns)
-- ⬜ T12: Write unit tests with moto mocks for S3/CloudFront; mock boto3 for AgentCore
+- ✅ T07: Implement `aws/session.py` — boto3 session creation, account ID lookup
+- ✅ T08: Implement `aws/s3.py` — bucket CRUD, directory upload with MIME types
+- ✅ T09: Implement `aws/cloudfront.py` — distribution CRUD with OAC
+- ✅ T10: Implement `aws/cf_function.py` — CloudFront Function CRUD with JS router template
+- ✅ T11: Implement `aws/agentcore.py` — Runtime CRUD (adapted from toolkit patterns)
+- ✅ T12: Write unit tests with moto mocks for S3/CloudFront; mock boto3 for AgentCore
 
 ## Sprint 2: Orchestration
 
@@ -56,11 +56,11 @@
 
 ### Tasks
 
-- ⬜ T13: Implement `deploy.py` — orchestrate all AWS modules with Rich progress display
-- ⬜ T14: Implement `destroy.py` — reverse teardown with confirmation prompt
-- ⬜ T15: Implement `status.py` — query resource states, display Rich table
-- ⬜ T16: Wire orchestrators into CLI commands (connect deploy.py/destroy.py/status.py to cli.py)
-- ⬜ T17: Implement state file read/write (`.three-stars-state.json`)
+- ✅ T13: Implement `deploy.py` — orchestrate all AWS modules with Rich progress display
+- ✅ T14: Implement `destroy.py` — reverse teardown with confirmation prompt
+- ✅ T15: Implement `status.py` — query resource states, display Rich table
+- ✅ T16: Wire orchestrators into CLI commands (connect deploy.py/destroy.py/status.py to cli.py)
+- ✅ T17: Implement state file read/write (`.three-stars-state.json`)
 
 ## Sprint 3: Init Command & Polish
 
@@ -69,11 +69,11 @@
 
 ### Tasks
 
-- ⬜ T18: Create `templates/starter/` with minimal project template (config, frontend, agent)
-- ⬜ T19: Implement `init` command — copy template, substitute project name
-- ⬜ T20: Add comprehensive error handling (missing credentials, invalid config, permission errors)
-- ⬜ T21: Add `--yes`, `--region`, `--profile` CLI flag support
-- ⬜ T22: Integration tests for CLI commands (end-to-end with moto)
+- ✅ T18: Create `templates/starter/` with minimal project template (config, frontend, agent)
+- ✅ T19: Implement `init` command — copy template, substitute project name
+- ✅ T20: Add comprehensive error handling (missing credentials, invalid config, permission errors)
+- ✅ T21: Add `--yes`, `--region`, `--profile` CLI flag support
+- ✅ T22: Integration tests for CLI commands (end-to-end with moto)
 
 ## Sprint 4: Documentation & Release
 
@@ -82,9 +82,9 @@
 
 ### Tasks
 
-- ⬜ T23: Update README.md with installation, quick start, configuration reference
-- ⬜ T24: Update spec files with final implementation details
-- ⬜ T25: Add GitHub Actions CI workflow (lint, test, build)
+- ✅ T23: Update README.md with installation, quick start, configuration reference
+- ✅ T24: Update spec files with final implementation details
+- ✅ T25: Add GitHub Actions CI workflow (lint, test, build)
 
 ## Backlog
 

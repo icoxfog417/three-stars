@@ -101,6 +101,12 @@ venv/
 *.swp
 *.swo
 
+# three-stars state
+.three-stars-state.json
+
 # OS
 .DS_Store
 Thumbs.db
+
+# pytest
+.pytest_cache/
