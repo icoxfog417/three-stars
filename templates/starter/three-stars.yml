@@ -1,0 +1,21 @@
+# three-stars project configuration
+name: my-ai-app
+
+# AWS region
+region: us-east-1
+
+# Agent configuration
+agent:
+  source: ./agent
+  model: anthropic.claude-sonnet-4-20250514
+  description: "My AI assistant"
+  memory: 512
+
+# Frontend configuration
+app:
+  source: ./app
+  index: index.html
+
+# API routing
+api:
+  prefix: /api
