@@ -15,16 +15,18 @@ User CLI                      AWS Cloud
 │  CLI (Click) │───▶│  S3 Bucket (frontend static files)      │
 │              │    │       ▲                                  │
 │  config.py   │    │       │ OAC                              │
-│  deploy.py   │    │  CloudFront Distribution                 │
-│  destroy.py  │    │   ├── /* → S3 origin                    │
-│  status.py   │    │   └── /api/* → CF Function → AgentCore  │
+│  state.py    │    │  CloudFront Distribution                 │
+│  naming.py   │    │   ├── /* → S3 origin                    │
+│  deploy.py   │    │   └── /api/* → Lambda → AgentCore       │
+│  destroy.py  │    │                                          │
+│  status.py   │    │  Lambda@Edge (SHA256 for OAC)           │
 │              │    │                                          │
-│  aws/        │    │  CloudFront Function (JS router)        │
-│  ├─session   │    │                                          │
-│  ├─s3        │    │  Bedrock AgentCore Runtime               │
-│  ├─cloudfront│    │   └── agent.py + Bedrock model access   │
-│  ├─cf_function│   │                                          │
-│  └─agentcore │    │  IAM Role (execution permissions)       │
+│  resources/  │    │  Lambda Bridge (API → AgentCore)        │
+│  ├─agentcore │    │                                          │
+│  ├─storage   │    │  Bedrock AgentCore Runtime               │
+│  ├─api_bridge│    │   └── agent.py + Bedrock model access   │
+│  ├─edge      │    │                                          │
+│  └─cdn       │    │  IAM Roles (per-resource)               │
 └──────────────┘    └──────────────────────────────────────────┘
 ```
 
@@ -61,7 +63,9 @@ Parsed from `three-stars.yml`.
 
 ### 2.2 DeploymentState
 
-Stored in `.three-stars-state.json`.
+Stored in `.three-stars-state.json`. Uses typed dataclasses for compile-time safety.
+
+**Top-level state:**
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -69,13 +73,74 @@ Stored in `.three-stars-state.json`.
 | project_name | str | Project name from config |
 | region | str | AWS region used |
 | deployed_at | str | ISO 8601 timestamp |
-| resources.s3_bucket | str | S3 bucket name |
-| resources.agentcore_runtime_id | str | AgentCore runtime ID |
-| resources.agentcore_endpoint | str | AgentCore invoke URL |
-| resources.cloudfront_distribution_id | str | CloudFront distribution ID |
-| resources.cloudfront_function_name | str | CloudFront Function name |
-| resources.cloudfront_domain | str | CloudFront domain name (*.cloudfront.net) |
-| resources.iam_role_arn | str | IAM role ARN |
+| updated_at | str \| None | Last update timestamp |
+| agentcore | AgentCoreState \| None | AgentCore resource state |
+| storage | StorageState \| None | S3 storage resource state |
+| api_bridge | ApiBridgeState \| None | Lambda bridge resource state |
+| edge | EdgeState \| None | Lambda@Edge resource state |
+| cdn | CdnState \| None | CloudFront CDN resource state |
+
+**AgentCoreState:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| iam_role_name | str | IAM role name |
+| iam_role_arn | str | IAM role ARN |
+| runtime_id | str | AgentCore runtime ID |
+| runtime_arn | str | AgentCore runtime ARN |
+| endpoint_name | str | AgentCore endpoint name |
+| endpoint_arn | str | AgentCore endpoint ARN |
+
+**StorageState:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| s3_bucket | str | S3 bucket name |
+
+**ApiBridgeState:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| role_name | str | Lambda execution role name |
+| role_arn | str | Lambda execution role ARN |
+| function_name | str | Lambda function name |
+| function_arn | str | Lambda function ARN |
+| function_url | str | Lambda function URL |
+
+**EdgeState:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| role_name | str | Lambda@Edge role name |
+| role_arn | str | Lambda@Edge role ARN |
+| function_name | str | Lambda@Edge function name |
+| function_arn | str | Lambda@Edge function ARN (versioned) |
+
+**CdnState:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| distribution_id | str | CloudFront distribution ID |
+| domain | str | CloudFront domain name (*.cloudfront.net) |
+| arn | str | CloudFront distribution ARN |
+| oac_id | str | S3 Origin Access Control ID |
+| lambda_oac_id | str | Lambda Origin Access Control ID |
+
+### 2.3 ResourceNames
+
+Computed from config + account ID. Frozen dataclass — immutable after creation.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| prefix | str | Base resource prefix (from project name) |
+| bucket | str | S3 bucket name (prefix + account hash) |
+| agentcore_role | str | AgentCore IAM role name |
+| agent_name | str | AgentCore runtime name |
+| endpoint_name | str | AgentCore endpoint name |
+| lambda_role | str | Lambda execution role name |
+| lambda_function | str | Lambda function name |
+| edge_role | str | Lambda@Edge role name |
+| edge_function | str | Lambda@Edge function name |
 
 ## 3. API Design
 
@@ -90,13 +155,14 @@ Stored in `.three-stars-state.json`.
 
 ### 3.2 AWS API Calls
 
-| Module | AWS Service | Operations Used |
-|--------|------------|-----------------|
-| agentcore.py | Bedrock AgentCore | CreateAgentRuntime, GetAgentRuntime, UpdateAgentRuntime, DeleteAgentRuntime |
-| s3.py | S3 | CreateBucket, PutObject, DeleteObject, ListObjectsV2, DeleteBucket, PutBucketPolicy |
-| cloudfront.py | CloudFront | CreateDistribution, GetDistribution, UpdateDistribution, DeleteDistribution, CreateOriginAccessControl |
-| cf_function.py | CloudFront | CreateFunction, DescribeFunction, UpdateFunction, PublishFunction, DeleteFunction |
-| session.py | STS | GetCallerIdentity |
+| Resource Module | AWS Services | Operations Used |
+|----------------|-------------|-----------------|
+| resources/agentcore.py | IAM, Bedrock AgentCore, S3 | CreateRole, CreateAgentRuntime, GetAgentRuntime, DeleteAgentRuntime, CreateAgentRuntimeEndpoint, DeleteAgentRuntimeEndpoint |
+| resources/storage.py | S3 | CreateBucket, PutObject, DeleteObject, ListObjectsV2, DeleteBucket, PutBucketPolicy |
+| resources/api_bridge.py | IAM, Lambda | CreateRole, CreateFunction, CreateFunctionUrlConfig, DeleteFunction, DeleteRole |
+| resources/edge.py | IAM, Lambda (us-east-1) | CreateRole, CreateFunction, DeleteFunction, DeleteRole |
+| resources/cdn.py | CloudFront, Lambda | CreateDistribution, GetDistribution, UpdateDistribution, DeleteDistribution, CreateOriginAccessControl, AddPermission |
+| resources/_base.py | STS | GetCallerIdentity |
 
 ## 4. Component Design
 
@@ -113,40 +179,63 @@ Stored in `.three-stars-state.json`.
 **Outputs**: `ProjectConfig` dataclass
 **Validation**: Required fields present, paths exist, valid AWS region format
 
-### 4.3 Deploy Orchestrator (`deploy.py`)
+### 4.3 State Manager (`state.py`)
 
-**Purpose**: Coordinate deployment of all resources in order
-**Inputs**: `ProjectConfig`, boto3 session
+**Purpose**: Typed deployment state with serialization
+**Types**: `DeploymentState`, `AgentCoreState`, `StorageState`, `ApiBridgeState`, `EdgeState`, `CdnState`
+**Serialization**: `dataclasses.asdict()` for save, nested dict reconstruction for load
+**Key principle**: All state access uses typed attribute access — no dynamic dictionary keys
+
+### 4.4 Naming (`naming.py`)
+
+**Purpose**: Compute all AWS resource names from config and account ID
+**Inputs**: `ProjectConfig`, AWS account ID
+**Outputs**: `ResourceNames` frozen dataclass
+**Key principle**: Single source of truth for all resource naming conventions
+
+### 4.5 Deploy Orchestrator (`deploy.py`)
+
+**Purpose**: Coordinate deployment of all resources in order, threading cross-resource data
+**Inputs**: `ProjectConfig`, optional AWS profile
 **Outputs**: `DeploymentState` saved to disk
+**Design**: The orchestrator is the explicit dependency manager — it passes typed outputs from earlier resources as inputs to later ones. Resource modules never reference each other.
 **Sequence**:
-1. Create IAM role (if not exists)
-2. Package and deploy agent to AgentCore
-3. Create S3 bucket and upload frontend
-4. Create CloudFront Function with AgentCore endpoint
-5. Create CloudFront Distribution with S3 origin + function
-6. Save state file
+1. AgentCore: IAM role + runtime + endpoint → `AgentCoreState`
+2. Storage: S3 bucket + frontend upload → `StorageState`
+3. API Bridge: Lambda function + role (needs `runtime_arn`) → `ApiBridgeState`
+4. Edge: Lambda@Edge function + role → `EdgeState`
+5. CDN: CloudFront distribution + OACs (needs bucket, function URL, edge ARN) → `CdnState`
 
-### 4.4 Destroy Orchestrator (`destroy.py`)
+### 4.6 Destroy Orchestrator (`destroy.py`)
 
 **Purpose**: Tear down all resources in reverse order
-**Inputs**: `DeploymentState`
+**Inputs**: `DeploymentState` (typed)
+**Design**: Each module receives only its own typed state (e.g., `CdnState`). `None` check handles partially-deployed stacks.
 **Sequence** (reverse of deploy):
-1. Delete CloudFront Distribution (disable first, wait, then delete)
-2. Delete CloudFront Function
-3. Delete AgentCore Runtime
-4. Empty and delete S3 Bucket
-5. Delete IAM Role
-6. Remove state file
+1. CDN: disable and delete distribution + OACs
+2. Edge: delete Lambda@Edge function + role
+3. API Bridge: delete Lambda function + role
+4. Storage: empty and delete S3 bucket
+5. AgentCore: delete endpoint + runtime + IAM role
 
-### 4.5 Status Reporter (`status.py`)
+### 4.7 Status Reporter (`status.py`)
 
 **Purpose**: Query and display resource health
-**Inputs**: `DeploymentState`, boto3 session
+**Inputs**: `DeploymentState` (typed), boto3 session
 **Outputs**: Rich table with resource statuses
+**Design**: Each module's `get_status()` receives its own typed state
 
-### 4.6 AWS Modules (`aws/`)
+### 4.8 Resource Modules (`resources/`)
 
-Each module is a thin wrapper around boto3 calls for one AWS service. Modules are stateless — they receive a boto3 session and return results. Error handling wraps `botocore.exceptions.ClientError` with user-friendly messages.
+Each module owns a cohesive resource group (e.g., a Lambda function + its IAM role). Modules expose three plain functions: `deploy()`, `destroy()`, `get_status()`. Each `deploy()` returns a typed state dataclass. Modules are stateless and never import each other — all cross-resource wiring is in the orchestrator. Error handling wraps `botocore.exceptions.ClientError` with user-friendly messages.
+
+| Module | Resource Group | Dependencies (from orchestrator) |
+|--------|---------------|----------------------------------|
+| `agentcore.py` | IAM role + runtime + endpoint | None |
+| `storage.py` | S3 bucket + frontend upload | None |
+| `api_bridge.py` | Lambda function + IAM role + function URL | `agentcore.runtime_arn` |
+| `edge.py` | Lambda@Edge function + IAM role (us-east-1) | None |
+| `cdn.py` | CloudFront distribution + OACs + bucket policy | `storage.s3_bucket`, `api_bridge.function_url`, `api_bridge.function_name`, `edge.function_arn` |
 
 ## 5. Security Architecture
 
@@ -172,10 +261,10 @@ pip install three-stars
   └── Installs CLI entry point `three-stars`
 
 three-stars deploy
-  └── Creates AWS resources via boto3 API calls
-      ├── S3 bucket + objects
-      ├── AgentCore runtime
-      ├── CloudFront distribution
-      ├── CloudFront function
-      └── IAM role
+  └── Orchestrator creates resources via resource modules
+      ├── agentcore: IAM role + runtime + endpoint
+      ├── storage: S3 bucket + frontend files
+      ├── api_bridge: Lambda function + IAM role + function URL
+      ├── edge: Lambda@Edge function + IAM role
+      └── cdn: CloudFront distribution + OACs
 ```
