@@ -13,8 +13,14 @@ from botocore.exceptions import ClientError
 def create_origin_access_control(
     session: boto3.Session,
     name: str,
+    origin_type: str = "s3",
 ) -> str:
-    """Create an Origin Access Control for S3.
+    """Create an Origin Access Control.
+
+    Args:
+        session: boto3 session.
+        name: OAC name.
+        origin_type: Origin type — "s3" or "lambda".
 
     Returns the OAC ID.
     """
@@ -25,7 +31,7 @@ def create_origin_access_control(
             "Description": f"OAC for {name}",
             "SigningProtocol": "sigv4",
             "SigningBehavior": "always",
-            "OriginAccessControlOriginType": "s3",
+            "OriginAccessControlOriginType": origin_type,
         }
     )
     return resp["OriginAccessControl"]["Id"]
@@ -37,6 +43,8 @@ def create_distribution(
     region: str,
     oac_id: str,
     lambda_function_url: str | None = None,
+    lambda_oac_id: str | None = None,
+    edge_function_arn: str | None = None,
     index_document: str = "index.html",
     api_prefix: str = "/api",
     comment: str = "",
@@ -47,8 +55,10 @@ def create_distribution(
         session: boto3 session.
         bucket_name: S3 bucket name (origin).
         region: S3 bucket region.
-        oac_id: Origin Access Control ID.
+        oac_id: Origin Access Control ID for S3.
         lambda_function_url: Lambda function URL for API bridge (optional).
+        lambda_oac_id: OAC ID for Lambda origin (enables SigV4 signing).
+        edge_function_arn: Versioned Lambda@Edge ARN for SHA256 computation.
         index_document: Default root object.
         api_prefix: API path prefix for Lambda routing.
         comment: Distribution comment.
@@ -78,50 +88,64 @@ def create_distribution(
         lambda_domain = parsed.hostname
         lambda_origin_id = "Lambda-API-Bridge"
 
-        origins.append(
-            {
-                "Id": lambda_origin_id,
-                "DomainName": lambda_domain,
-                "CustomOriginConfig": {
-                    "HTTPPort": 80,
-                    "HTTPSPort": 443,
-                    "OriginProtocolPolicy": "https-only",
-                    "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
-                },
-            }
-        )
+        lambda_origin = {
+            "Id": lambda_origin_id,
+            "DomainName": lambda_domain,
+            "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "HTTPSPort": 443,
+                "OriginProtocolPolicy": "https-only",
+                "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+            },
+        }
+        if lambda_oac_id:
+            lambda_origin["OriginAccessControlId"] = lambda_oac_id
+        origins.append(lambda_origin)
 
         # Add cache behavior for /api/* that routes to Lambda
         api_pattern = f"{api_prefix}/*" if not api_prefix.endswith("/*") else api_prefix
-        cache_behaviors.append(
-            {
-                "PathPattern": api_pattern,
-                "TargetOriginId": lambda_origin_id,
-                "ViewerProtocolPolicy": "https-only",
-                "AllowedMethods": {
-                    "Quantity": 7,
-                    "Items": [
-                        "GET",
-                        "HEAD",
-                        "OPTIONS",
-                        "PUT",
-                        "POST",
-                        "PATCH",
-                        "DELETE",
-                    ],
-                    "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
-                },
-                "Compress": True,
-                "ForwardedValues": {
-                    "QueryString": True,
-                    "Cookies": {"Forward": "all"},
-                    "Headers": {"Quantity": 1, "Items": ["*"]},
-                },
-                "MinTTL": 0,
-                "DefaultTTL": 0,
-                "MaxTTL": 0,
+        api_cache_behavior = {
+            "PathPattern": api_pattern,
+            "TargetOriginId": lambda_origin_id,
+            "ViewerProtocolPolicy": "https-only",
+            "AllowedMethods": {
+                "Quantity": 7,
+                "Items": [
+                    "GET",
+                    "HEAD",
+                    "OPTIONS",
+                    "PUT",
+                    "POST",
+                    "PATCH",
+                    "DELETE",
+                ],
+                "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+            },
+            "Compress": True,
+            "ForwardedValues": {
+                "QueryString": True,
+                "Cookies": {"Forward": "all"},
+                "Headers": {"Quantity": 1, "Items": ["*"]},
+            },
+            "MinTTL": 0,
+            "DefaultTTL": 0,
+            "MaxTTL": 0,
+        }
+
+        # Lambda@Edge computes SHA256 for OAC-signed POST/PUT requests
+        if edge_function_arn:
+            api_cache_behavior["LambdaFunctionAssociations"] = {
+                "Quantity": 1,
+                "Items": [
+                    {
+                        "LambdaFunctionARN": edge_function_arn,
+                        "EventType": "origin-request",
+                        "IncludeBody": True,
+                    }
+                ],
             }
-        )
+
+        cache_behaviors.append(api_cache_behavior)
 
     # Default cache behavior (S3 frontend)
     default_cache_behavior = {
