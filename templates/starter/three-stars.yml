@@ -7,7 +7,7 @@ region: us-east-1
 # Agent configuration
 agent:
   source: ./agent
-  model: anthropic.claude-sonnet-4-20250514
+  model: us.anthropic.claude-sonnet-4-20250514-v1:0
   description: "My AI assistant"
   memory: 512
 

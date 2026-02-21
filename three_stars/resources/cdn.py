@@ -115,16 +115,27 @@ def _create_origin_access_control(
 ) -> str:
     """Create an Origin Access Control. Returns the OAC ID."""
     cf = session.client("cloudfront")
-    resp = cf.create_origin_access_control(
-        OriginAccessControlConfig={
-            "Name": name,
-            "Description": f"OAC for {name}",
-            "SigningProtocol": "sigv4",
-            "SigningBehavior": "always",
-            "OriginAccessControlOriginType": origin_type,
-        }
-    )
-    return resp["OriginAccessControl"]["Id"]
+    try:
+        resp = cf.create_origin_access_control(
+            OriginAccessControlConfig={
+                "Name": name,
+                "Description": f"OAC for {name}",
+                "SigningProtocol": "sigv4",
+                "SigningBehavior": "always",
+                "OriginAccessControlOriginType": origin_type,
+            }
+        )
+        return resp["OriginAccessControl"]["Id"]
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "OriginAccessControlAlreadyExists":
+            # Find existing OAC by name
+            paginator = cf.get_paginator("list_origin_access_controls")
+            for page in paginator.paginate():
+                for item in page["OriginAccessControlList"].get("Items", []):
+                    if item["Name"] == name:
+                        return item["Id"]
+            raise RuntimeError(f"OAC '{name}' exists but could not be found in listing")
+        raise
 
 
 def _create_distribution(
@@ -249,8 +260,10 @@ def _create_distribution(
     if tags:
         tag_items = [{"Key": k, "Value": v} for k, v in tags.items()]
         resp = cf.create_distribution_with_tags(
-            DistributionConfig=dist_config,
-            Tags={"Items": tag_items},
+            DistributionConfigWithTags={
+                "DistributionConfig": dist_config,
+                "Tags": {"Items": tag_items},
+            }
         )
     else:
         resp = cf.create_distribution(DistributionConfig=dist_config)

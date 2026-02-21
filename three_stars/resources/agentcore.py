@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -152,20 +154,105 @@ def _is_empty_state(state: AgentCoreState) -> bool:
 
 
 def _package_agent(agent_dir: str | Path) -> bytes:
-    """Package agent source directory into a zip file."""
-    agent_path = Path(agent_dir)
-    buffer = io.BytesIO()
+    """Package agent source + pip dependencies into a deployment zip.
 
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(agent_path.rglob("*")):
-            if file_path.is_dir():
-                continue
-            if "__pycache__" in file_path.parts or file_path.name.startswith("."):
-                continue
-            arcname = str(file_path.relative_to(agent_path))
-            zf.write(file_path, arcname)
+    If the agent directory contains a requirements.txt, dependencies are
+    installed via ``uv`` (with ``pip`` as fallback) cross-compiled for
+    ARM64 Linux so they work on the AgentCore runtime.  The final zip
+    layers dependencies first, then source code (source wins on conflict).
+    """
+    agent_path = Path(agent_dir)
+    requirements = agent_path / "requirements.txt"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        deps_dir = Path(tmp) / "deps"
+        deps_dir.mkdir()
+
+        if requirements.exists():
+            _install_dependencies(requirements, deps_dir)
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Layer 1: installed dependencies
+            _add_directory_to_zip(zf, deps_dir, deps_dir)
+
+            # Layer 2: agent source code (overwrites on conflict)
+            _add_directory_to_zip(zf, agent_path, agent_path)
 
     return buffer.getvalue()
+
+
+def _install_dependencies(requirements: Path, target_dir: Path) -> None:
+    """Install pip dependencies into *target_dir* for ARM64 Linux.
+
+    Tries ``uv`` first (fast, supports cross-compilation natively).
+    Falls back to ``pip`` if ``uv`` is not installed.
+    """
+    uv_cmd = [
+        "uv",
+        "pip",
+        "install",
+        "--target",
+        str(target_dir),
+        "--python-version",
+        "3.11",
+        "--python-platform",
+        "aarch64-manylinux2014",
+        "--only-binary",
+        ":all:",
+        "-r",
+        str(requirements),
+    ]
+
+    try:
+        subprocess.run(uv_cmd, check=True, capture_output=True, text=True)
+        return
+    except FileNotFoundError:
+        pass  # uv not installed — try pip
+
+    pip_cmd = [
+        "pip",
+        "install",
+        "--target",
+        str(target_dir),
+        "--platform",
+        "manylinux2014_aarch64",
+        "--python-version",
+        "3.11",
+        "--only-binary",
+        ":all:",
+        "--implementation",
+        "cp",
+        "-r",
+        str(requirements),
+    ]
+
+    try:
+        subprocess.run(pip_cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Neither 'uv' nor 'pip' found. Install one to bundle agent dependencies."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Failed to install agent dependencies:\n{exc.stderr}") from exc
+
+
+_EXCLUDED_SUFFIXES = {".dist-info", ".egg-info"}
+
+
+def _add_directory_to_zip(zf: zipfile.ZipFile, root: Path, base: Path) -> None:
+    """Add all files under *root* into *zf*, relative to *base*."""
+    for file_path in sorted(root.rglob("*")):
+        if file_path.is_dir():
+            continue
+        if "__pycache__" in file_path.parts:
+            continue
+        if file_path.name.startswith("."):
+            continue
+        if any(p.endswith(s) for p in file_path.parts for s in _EXCLUDED_SUFFIXES):
+            continue
+        arcname = str(file_path.relative_to(base))
+        zf.write(file_path, arcname)
 
 
 def _upload_agent_package(
@@ -315,6 +402,7 @@ def _update_agent_runtime(
                 "entryPoint": entry_point,
             },
         },
+        "networkConfiguration": {"networkMode": "PUBLIC"},
     }
 
     if description:

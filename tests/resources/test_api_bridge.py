@@ -53,6 +53,7 @@ class TestLambdaFunction:
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
+            endpoint_name="test_endpoint",
             region="us-east-1",
         )
 
@@ -70,6 +71,7 @@ class TestLambdaFunction:
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
+            endpoint_name="test_endpoint",
             region="us-east-1",
         )
 
@@ -84,6 +86,7 @@ class TestLambdaFunction:
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
+            endpoint_name="test_endpoint",
             region="us-east-1",
         )
 
@@ -105,6 +108,7 @@ class TestGrantCloudfrontAccess:
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
+            endpoint_name="test_endpoint",
             region="us-east-1",
         )
 
@@ -132,6 +136,7 @@ class TestGrantCloudfrontAccess:
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
+            endpoint_name="test_endpoint",
             region="us-east-1",
         )
 
@@ -242,6 +247,7 @@ class TestDeleteLambdaBridge:
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
+            endpoint_name="test_endpoint",
             region="us-east-1",
         )
         _delete_lambda_function(session, "test-bridge")
