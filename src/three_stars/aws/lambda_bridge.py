@@ -364,9 +364,25 @@ def create_edge_role(session: boto3.Session, role_name: str) -> str:
         raise
 
     # Lambda@Edge only needs basic execution (CloudWatch logs)
-    iam.attach_role_policy(
+    iam.put_role_policy(
         RoleName=role_name,
-        PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+        PolicyName="lambda-edge-basic-execution",
+        PolicyDocument=json.dumps(
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "logs:CreateLogGroup",
+                            "logs:CreateLogStream",
+                            "logs:PutLogEvents",
+                        ],
+                        "Resource": "arn:aws:logs:*:*:*",
+                    }
+                ],
+            }
+        ),
     )
 
     # Wait for role propagation
@@ -446,16 +462,11 @@ def delete_edge_function(session: boto3.Session, function_name: str) -> None:
 
 
 def delete_edge_role(session: boto3.Session, role_name: str) -> None:
-    """Delete the Lambda@Edge IAM role."""
+    """Delete the Lambda@Edge IAM role and its inline policies."""
     iam = session.client("iam")
     try:
-        # Detach managed policies
-        attached = iam.list_attached_role_policies(RoleName=role_name)
-        for policy in attached.get("AttachedPolicies", []):
-            iam.detach_role_policy(RoleName=role_name, PolicyArn=policy["PolicyArn"])
-        # Delete inline policies
-        inline = iam.list_role_policies(RoleName=role_name)
-        for policy_name in inline.get("PolicyNames", []):
+        policies = iam.list_role_policies(RoleName=role_name)
+        for policy_name in policies.get("PolicyNames", []):
             iam.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
         iam.delete_role(RoleName=role_name)
     except ClientError as e:
