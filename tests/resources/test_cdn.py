@@ -1,4 +1,4 @@
-"""Tests for CloudFront distribution and OAC operations."""
+"""Tests for CDN resource module (CloudFront distribution + OAC)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
-from three_stars.aws.cloudfront import (
-    create_distribution,
-    create_origin_access_control,
-    delete_origin_access_control,
+from three_stars.resources.cdn import (
+    _create_distribution,
+    _create_origin_access_control,
+    _delete_origin_access_control,
 )
 
 
@@ -20,7 +20,7 @@ class TestOriginAccessControl:
 
     def test_create_s3_oac(self):
         session = boto3.Session(region_name="us-east-1")
-        oac_id = create_origin_access_control(session, "test-s3-oac")
+        oac_id = _create_origin_access_control(session, "test-s3-oac")
         assert oac_id
 
         cf = session.client("cloudfront")
@@ -32,7 +32,7 @@ class TestOriginAccessControl:
 
     def test_create_lambda_oac(self):
         session = boto3.Session(region_name="us-east-1")
-        oac_id = create_origin_access_control(session, "test-lambda-oac", origin_type="lambda")
+        oac_id = _create_origin_access_control(session, "test-lambda-oac", origin_type="lambda")
         assert oac_id
 
         cf = session.client("cloudfront")
@@ -44,8 +44,8 @@ class TestOriginAccessControl:
 
     def test_delete_oac(self):
         session = boto3.Session(region_name="us-east-1")
-        oac_id = create_origin_access_control(session, "test-oac")
-        delete_origin_access_control(session, oac_id)
+        oac_id = _create_origin_access_control(session, "test-oac")
+        _delete_origin_access_control(session, oac_id)
 
         cf = session.client("cloudfront")
         with pytest.raises(ClientError):
@@ -65,10 +65,10 @@ class TestDistribution:
         """Distribution should include Lambda origin with OAC."""
         session = boto3.Session(region_name="us-east-1")
         self._setup_s3_bucket(session)
-        s3_oac_id = create_origin_access_control(session, "s3-oac")
-        lambda_oac_id = create_origin_access_control(session, "lambda-oac", origin_type="lambda")
+        s3_oac_id = _create_origin_access_control(session, "s3-oac")
+        lambda_oac_id = _create_origin_access_control(session, "lambda-oac", origin_type="lambda")
 
-        result = create_distribution(
+        result = _create_distribution(
             session,
             bucket_name="test-bucket",
             region="us-east-1",
@@ -93,9 +93,9 @@ class TestDistribution:
         """Distribution without Lambda should have only S3 origin."""
         session = boto3.Session(region_name="us-east-1")
         self._setup_s3_bucket(session)
-        oac_id = create_origin_access_control(session, "s3-oac")
+        oac_id = _create_origin_access_control(session, "s3-oac")
 
-        result = create_distribution(
+        result = _create_distribution(
             session,
             bucket_name="test-bucket",
             region="us-east-1",

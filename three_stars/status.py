@@ -5,7 +5,7 @@ from __future__ import annotations
 from rich.console import Console
 from rich.table import Table
 
-from three_stars.aws import agentcore, cloudfront, session
+from three_stars.resources import _base, agentcore, api_bridge, cdn, edge, storage
 from three_stars.state import load_state
 
 console = Console()
@@ -27,13 +27,9 @@ def run_status(
         console.print("Run 'sss deploy' to deploy your project.")
         return
 
-    resources = state.get("resources", {})
-    region = state.get("region", "us-east-1")
-    project_name = state.get("project_name", "unknown")
-
-    console.print(f"\n[bold]Project:[/bold] [cyan]{project_name}[/cyan]")
-    console.print(f"[bold]Region:[/bold] [yellow]{region}[/yellow]")
-    console.print(f"[bold]Deployed at:[/bold] {state.get('deployed_at', 'unknown')}")
+    console.print(f"\n[bold]Project:[/bold] [cyan]{state.project_name}[/cyan]")
+    console.print(f"[bold]Region:[/bold] [yellow]{state.region}[/yellow]")
+    console.print(f"[bold]Deployed at:[/bold] {state.deployed_at}")
 
     # Create status table
     table = Table(title="Resource Status")
@@ -41,100 +37,32 @@ def run_status(
     table.add_column("ID / Name")
     table.add_column("Status")
 
-    sess = session.create_session(region=region, profile=profile)
+    sess = _base.create_session(region=state.region, profile=profile)
 
-    # S3 Bucket
-    bucket_name = resources.get("s3_bucket", "")
-    if bucket_name:
-        bucket_status = _check_s3_bucket(sess, bucket_name)
-        table.add_row("S3 Bucket", bucket_name, bucket_status)
+    # Collect status rows from each resource module
+    if state.storage:
+        for row in storage.get_status(sess, state.storage):
+            table.add_row(row.resource, row.id, row.status)
 
-    # AgentCore Runtime
-    runtime_id = resources.get("agentcore_runtime_id", "")
-    if runtime_id:
-        runtime_status = _check_agentcore(sess, runtime_id)
-        table.add_row("AgentCore Runtime", runtime_id, runtime_status)
+    if state.agentcore:
+        for row in agentcore.get_status(sess, state.agentcore):
+            table.add_row(row.resource, row.id, row.status)
 
-    # AgentCore Endpoint
-    endpoint_name = resources.get("agentcore_endpoint_name", "")
-    if endpoint_name:
-        table.add_row("AgentCore Endpoint", endpoint_name, runtime_status)
+    if state.api_bridge:
+        for row in api_bridge.get_status(sess, state.api_bridge):
+            table.add_row(row.resource, row.id, row.status)
 
-    # Lambda Bridge
-    lambda_func = resources.get("lambda_function_name", "")
-    if lambda_func:
-        lambda_status = _check_lambda(sess, lambda_func)
-        table.add_row("Lambda Bridge", lambda_func, lambda_status)
+    if state.edge:
+        for row in edge.get_status(sess, state.edge):
+            table.add_row(row.resource, row.id, row.status)
 
-    # CloudFront Distribution
-    dist_id = resources.get("cloudfront_distribution_id", "")
-    if dist_id:
-        dist_status = _check_cloudfront(sess, dist_id)
-        table.add_row("CloudFront Distribution", dist_id, dist_status)
-
-    # IAM Roles
-    role_arn = resources.get("iam_role_arn", "")
-    if role_arn:
-        table.add_row("AgentCore IAM Role", role_arn.split("/")[-1], "[green]Active[/green]")
-    lambda_role = resources.get("lambda_role_name", "")
-    if lambda_role:
-        table.add_row("Lambda IAM Role", lambda_role, "[green]Active[/green]")
+    if state.cdn:
+        for row in cdn.get_status(sess, state.cdn):
+            table.add_row(row.resource, row.id, row.status)
 
     console.print()
     console.print(table)
 
     # Print URL
-    domain = resources.get("cloudfront_domain", "")
-    if domain:
-        console.print(f"\n[bold]URL:[/bold] https://{domain}")
-
-
-def _check_s3_bucket(sess, bucket_name: str) -> str:
-    """Check S3 bucket status."""
-    try:
-        s3 = sess.client("s3")
-        s3.head_bucket(Bucket=bucket_name)
-        return "[green]Active[/green]"
-    except Exception:
-        return "[red]Not Found[/red]"
-
-
-def _check_agentcore(sess, runtime_id: str) -> str:
-    """Check AgentCore runtime status."""
-    try:
-        result = agentcore.get_agent_runtime_status(sess, runtime_id)
-        status = result["status"]
-        if status == "READY":
-            return "[green]Ready[/green]"
-        elif status in ("CREATING", "UPDATING"):
-            return f"[yellow]{status}[/yellow]"
-        else:
-            return f"[red]{status}[/red]"
-    except Exception:
-        return "[red]Not Found[/red]"
-
-
-def _check_lambda(sess, function_name: str) -> str:
-    """Check Lambda function status."""
-    try:
-        lam = sess.client("lambda")
-        resp = lam.get_function(FunctionName=function_name)
-        state = resp["Configuration"]["State"]
-        if state == "Active":
-            return "[green]Active[/green]"
-        return f"[yellow]{state}[/yellow]"
-    except Exception:
-        return "[red]Not Found[/red]"
-
-
-def _check_cloudfront(sess, distribution_id: str) -> str:
-    """Check CloudFront distribution status."""
-    try:
-        result = cloudfront.get_distribution(sess, distribution_id)
-        status = result["status"]
-        if status == "Deployed":
-            return "[green]Deployed[/green]"
-        else:
-            return f"[yellow]{status}[/yellow]"
-    except Exception:
-        return "[red]Not Found[/red]"
+    if state.cdn:
+        console.print(f"\n[bold]URL:[/bold] https://{state.cdn.domain}")

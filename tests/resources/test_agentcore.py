@@ -1,4 +1,4 @@
-"""Tests for AgentCore operations."""
+"""Tests for AgentCore resource module."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from three_stars.aws.agentcore import (
-    create_iam_role,
-    delete_iam_role,
-    package_agent,
+from three_stars.resources.agentcore import (
+    _create_iam_role,
+    _delete_iam_role,
+    _package_agent,
 )
 
 
@@ -23,9 +23,8 @@ class TestPackageAgent:
         (agent_dir / "agent.py").write_text("def handler(): pass")
         (agent_dir / "requirements.txt").write_text("boto3")
 
-        result = package_agent(agent_dir)
+        result = _package_agent(agent_dir)
 
-        # Verify it's a valid zip
         zf = zipfile.ZipFile(BytesIO(result))
         names = zf.namelist()
         assert "agent.py" in names
@@ -39,7 +38,7 @@ class TestPackageAgent:
         pycache.mkdir()
         (pycache / "agent.cpython-311.pyc").write_bytes(b"\x00")
 
-        result = package_agent(agent_dir)
+        result = _package_agent(agent_dir)
         zf = zipfile.ZipFile(BytesIO(result))
         assert not any("__pycache__" in name for name in zf.namelist())
 
@@ -49,7 +48,7 @@ class TestPackageAgent:
         (agent_dir / "agent.py").write_text("def handler(): pass")
         (agent_dir / ".env").write_text("SECRET=123")
 
-        result = package_agent(agent_dir)
+        result = _package_agent(agent_dir)
         zf = zipfile.ZipFile(BytesIO(result))
         assert ".env" not in zf.namelist()
 
@@ -61,7 +60,7 @@ class TestPackageAgent:
         lib_dir.mkdir()
         (lib_dir / "helper.py").write_text("def help(): pass")
 
-        result = package_agent(agent_dir)
+        result = _package_agent(agent_dir)
         zf = zipfile.ZipFile(BytesIO(result))
         assert "lib/helper.py" in zf.namelist()
 
@@ -70,19 +69,19 @@ class TestPackageAgent:
 class TestIAMRole:
     def test_create_role(self):
         session = boto3.Session(region_name="us-east-1")
-        arn = create_iam_role(session, "test-role", "123456789012")
+        arn = _create_iam_role(session, "test-role", "123456789012")
         assert "test-role" in arn
 
     def test_create_role_idempotent(self):
         session = boto3.Session(region_name="us-east-1")
-        arn1 = create_iam_role(session, "test-role", "123456789012")
-        arn2 = create_iam_role(session, "test-role", "123456789012")
+        arn1 = _create_iam_role(session, "test-role", "123456789012")
+        arn2 = _create_iam_role(session, "test-role", "123456789012")
         assert arn1 == arn2
 
     def test_delete_role(self):
         session = boto3.Session(region_name="us-east-1")
-        create_iam_role(session, "test-role", "123456789012")
-        delete_iam_role(session, "test-role")
+        _create_iam_role(session, "test-role", "123456789012")
+        _delete_iam_role(session, "test-role")
 
         iam = session.client("iam")
         with pytest.raises(iam.exceptions.NoSuchEntityException):
@@ -90,5 +89,4 @@ class TestIAMRole:
 
     def test_delete_nonexistent_role(self):
         session = boto3.Session(region_name="us-east-1")
-        # Should not raise
-        delete_iam_role(session, "nonexistent-role")
+        _delete_iam_role(session, "nonexistent-role")

@@ -1,4 +1,4 @@
-"""Tests for Lambda bridge operations (OAC auth + Lambda@Edge)."""
+"""Tests for API bridge resource module (Lambda + IAM role + function URL)."""
 
 from __future__ import annotations
 
@@ -7,16 +7,14 @@ from unittest.mock import patch
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
-from three_stars.aws.lambda_bridge import (
-    create_edge_function,
-    create_edge_role,
-    create_lambda_function,
-    create_lambda_role,
-    delete_edge_role,
-    delete_lambda_function,
-    delete_lambda_role,
+from three_stars.resources.api_bridge import (
+    _create_lambda_function,
+    _create_lambda_role,
+    _delete_lambda_function,
+    _delete_lambda_role,
     grant_cloudfront_access,
 )
 
@@ -50,7 +48,7 @@ class TestLambdaFunction:
         session = boto3.Session(region_name="us-east-1")
         role_arn = _create_role(session)
 
-        result = create_lambda_function(
+        result = _create_lambda_function(
             session,
             function_name="test-bridge",
             role_arn=role_arn,
@@ -67,7 +65,7 @@ class TestLambdaFunction:
         session = boto3.Session(region_name="us-east-1")
         role_arn = _create_role(session)
 
-        create_lambda_function(
+        _create_lambda_function(
             session,
             function_name="test-bridge",
             role_arn=role_arn,
@@ -89,8 +87,8 @@ class TestLambdaFunction:
             region="us-east-1",
         )
 
-        result1 = create_lambda_function(session, **kwargs)
-        result2 = create_lambda_function(session, **kwargs)
+        result1 = _create_lambda_function(session, **kwargs)
+        result2 = _create_lambda_function(session, **kwargs)
         assert result1["function_url"] == result2["function_url"]
 
 
@@ -102,7 +100,7 @@ class TestGrantCloudfrontAccess:
         session = boto3.Session(region_name="us-east-1")
         role_arn = _create_role(session)
 
-        create_lambda_function(
+        _create_lambda_function(
             session,
             function_name="test-bridge",
             role_arn=role_arn,
@@ -129,7 +127,7 @@ class TestGrantCloudfrontAccess:
         session = boto3.Session(region_name="us-east-1")
         role_arn = _create_role(session)
 
-        create_lambda_function(
+        _create_lambda_function(
             session,
             function_name="test-bridge",
             role_arn=role_arn,
@@ -139,39 +137,39 @@ class TestGrantCloudfrontAccess:
 
         dist_arn = "arn:aws:cloudfront::123456789012:distribution/EDFDVBD6EXAMPLE"
         grant_cloudfront_access(session, "test-bridge", dist_arn)
-        # Should not raise
         grant_cloudfront_access(session, "test-bridge", dist_arn)
 
 
 @mock_aws
 class TestEdgeRole:
-    """Tests for Lambda@Edge IAM role."""
+    """Tests for Lambda@Edge IAM role (via api_bridge for backward compat)."""
 
-    @patch("three_stars.aws.lambda_bridge.time.sleep")
+    @patch("three_stars.resources.edge.time.sleep")
     def test_create_edge_role(self, mock_sleep):
+        from three_stars.resources.edge import _create_edge_role
+
         session = boto3.Session(region_name="us-east-1")
-        arn = create_edge_role(session, "test-edge-role")
+        arn = _create_edge_role(session, "test-edge-role")
         assert "test-edge-role" in arn
 
         iam = session.client("iam")
-
-        # Verify trust policy includes edgelambda
         role = iam.get_role(RoleName="test-edge-role")
         trust = role["Role"]["AssumeRolePolicyDocument"]
         principals = trust["Statement"][0]["Principal"]["Service"]
         assert "lambda.amazonaws.com" in principals
         assert "edgelambda.amazonaws.com" in principals
 
-        # Verify inline execution policy was attached
         policies = iam.list_role_policies(RoleName="test-edge-role")
         assert "lambda-edge-basic-execution" in policies["PolicyNames"]
 
-    @patch("three_stars.aws.lambda_bridge.time.sleep")
+    @patch("three_stars.resources.edge.time.sleep")
     def test_delete_edge_role(self, mock_sleep):
-        session = boto3.Session(region_name="us-east-1")
-        create_edge_role(session, "test-edge-role")
+        from three_stars.resources.edge import _create_edge_role, _delete_edge_role
 
-        delete_edge_role(session, "test-edge-role")
+        session = boto3.Session(region_name="us-east-1")
+        _create_edge_role(session, "test-edge-role")
+
+        _delete_edge_role(session, "test-edge-role")
 
         iam = session.client("iam")
         with pytest.raises(iam.exceptions.NoSuchEntityException):
@@ -207,24 +205,26 @@ class TestEdgeFunction:
         return resp["Role"]["Arn"]
 
     def test_create_edge_function_returns_versioned_arn(self):
+        from three_stars.resources.edge import _create_edge_function
+
         session = boto3.Session(region_name="us-east-1")
         role_arn = self._create_edge_role_arn(session)
 
-        versioned_arn = create_edge_function(session, "test-edge-sha256", role_arn)
+        versioned_arn = _create_edge_function(session, "test-edge-sha256", role_arn)
 
-        # Versioned ARN must end with a version number (not $LATEST)
         assert ":test-edge-sha256:" in versioned_arn
         version_part = versioned_arn.split(":")[-1]
         assert version_part.isdigit(), f"Expected version number, got {version_part}"
 
     def test_edge_function_created_in_us_east_1(self):
         """Lambda@Edge must be in us-east-1 regardless of session region."""
+        from three_stars.resources.edge import _create_edge_function
+
         session = boto3.Session(region_name="eu-west-1")
         role_arn = self._create_edge_role_arn(session)
 
-        create_edge_function(session, "test-edge-sha256", role_arn)
+        _create_edge_function(session, "test-edge-sha256", role_arn)
 
-        # Function should exist in us-east-1
         lam = session.client("lambda", region_name="us-east-1")
         resp = lam.get_function(FunctionName="test-edge-sha256")
         assert resp["Configuration"]["Runtime"] == "nodejs20.x"
@@ -237,26 +237,24 @@ class TestDeleteLambdaBridge:
     def test_delete_function(self):
         session = boto3.Session(region_name="us-east-1")
         role_arn = _create_role(session)
-        create_lambda_function(
+        _create_lambda_function(
             session,
             function_name="test-bridge",
             role_arn=role_arn,
             agent_runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123:runtime/test",
             region="us-east-1",
         )
-        delete_lambda_function(session, "test-bridge")
+        _delete_lambda_function(session, "test-bridge")
 
         lam = session.client("lambda")
-        from botocore.exceptions import ClientError
-
         with pytest.raises(ClientError, match="ResourceNotFoundException"):
             lam.get_function(FunctionName="test-bridge")
 
-    @patch("three_stars.aws.lambda_bridge.time.sleep")
+    @patch("three_stars.resources.api_bridge.time.sleep")
     def test_delete_role(self, mock_sleep):
         session = boto3.Session(region_name="us-east-1")
-        create_lambda_role(session, "test-role", "123456789012", "us-east-1")
-        delete_lambda_role(session, "test-role")
+        _create_lambda_role(session, "test-role", "123456789012", "us-east-1")
+        _delete_lambda_role(session, "test-role")
 
         iam = session.client("iam")
         with pytest.raises(iam.exceptions.NoSuchEntityException):

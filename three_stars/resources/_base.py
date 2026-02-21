@@ -1,4 +1,4 @@
-"""AWS session management."""
+"""Shared helpers for resource modules."""
 
 from __future__ import annotations
 
@@ -9,15 +9,7 @@ def create_session(
     region: str | None = None,
     profile: str | None = None,
 ) -> boto3.Session:
-    """Create a boto3 session.
-
-    Args:
-        region: AWS region name.
-        profile: AWS CLI profile name.
-
-    Returns:
-        Configured boto3.Session.
-    """
+    """Create a boto3 session."""
     kwargs: dict = {}
     if region:
         kwargs["region_name"] = region
@@ -30,8 +22,3 @@ def get_account_id(session: boto3.Session) -> str:
     """Get the AWS account ID for the current session."""
     sts = session.client("sts")
     return sts.get_caller_identity()["Account"]
-
-
-def get_region(session: boto3.Session) -> str:
-    """Get the region from the session."""
-    return session.region_name or "us-east-1"
