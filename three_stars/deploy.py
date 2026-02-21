@@ -113,6 +113,7 @@ def run_deploy(
             config,
             names,
             agent_runtime_arn=state.agentcore.runtime_arn,
+            endpoint_name=state.agentcore.endpoint_name,
             tags=aws_tags,
             tags_dict=tags,
         )

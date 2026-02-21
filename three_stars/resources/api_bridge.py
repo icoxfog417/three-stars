@@ -17,6 +17,7 @@ from three_stars.state import ApiBridgeState
 _BRIDGE_FUNCTION_CODE = '''\
 import json
 import os
+import uuid
 import boto3
 
 
@@ -29,16 +30,40 @@ def handler(event, context):
         import base64
         body = base64.b64decode(body).decode()
 
+    # Extract or generate a session id for AgentCore
+    try:
+        parsed = json.loads(body) if isinstance(body, str) else json.loads(body.decode("utf-8"))
+        session_id = parsed.get("session_id", str(uuid.uuid4()))
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        session_id = str(uuid.uuid4())
+
     runtime_arn = os.environ["AGENT_RUNTIME_ARN"]
+    endpoint_name = os.environ.get("AGENT_ENDPOINT_NAME", "DEFAULT")
 
     try:
         resp = client.invoke_agent_runtime(
             agentRuntimeArn=runtime_arn,
+            qualifier=endpoint_name,
+            runtimeSessionId=session_id,
             payload=body.encode("utf-8") if isinstance(body, str) else body,
             contentType="application/json",
         )
 
-        response_body = resp["response"].read().decode("utf-8")
+        # Handle EventStream or plain responses
+        content_type = resp.get("contentType", "")
+        if "text/event-stream" in content_type:
+            chunks = []
+            for event_data in resp["response"]:
+                if isinstance(event_data, dict):
+                    chunk = event_data.get("chunk", {})
+                    if "bytes" in chunk:
+                        chunks.append(chunk["bytes"].decode("utf-8"))
+                elif isinstance(event_data, bytes):
+                    chunks.append(event_data.decode("utf-8"))
+            response_body = "".join(chunks)
+        else:
+            response_body = resp["response"].read().decode("utf-8")
+
         status_code = resp.get("statusCode", 200)
     except Exception as e:
         response_body = json.dumps({"message": f"Agent invocation error: {e}"})
@@ -60,6 +85,7 @@ def deploy(
     names: ResourceNames,
     *,
     agent_runtime_arn: str,
+    endpoint_name: str = "DEFAULT",
     tags: list[dict[str, str]] | None = None,
     tags_dict: dict[str, str] | None = None,
 ) -> ApiBridgeState:
@@ -67,6 +93,7 @@ def deploy(
 
     Args:
         agent_runtime_arn: From agentcore.deploy() output — passed by orchestrator.
+        endpoint_name: AgentCore endpoint name for qualifier.
         tags: AWS tag list format for IAM roles.
         tags_dict: Dict format tags for Lambda functions.
     """
@@ -79,6 +106,7 @@ def deploy(
         function_name=names.lambda_function,
         role_arn=role_arn,
         agent_runtime_arn=agent_runtime_arn,
+        endpoint_name=endpoint_name,
         region=config.region,
         tags=tags_dict,
     )
@@ -227,12 +255,18 @@ def _create_lambda_function(
     function_name: str,
     role_arn: str,
     agent_runtime_arn: str,
-    region: str,
+    endpoint_name: str = "DEFAULT",
+    region: str = "us-east-1",
     tags: dict[str, str] | None = None,
 ) -> dict:
     """Create the Lambda bridge function with a function URL."""
     lam = session.client("lambda")
     zip_bytes = _build_function_zip()
+
+    env_vars = {
+        "AGENT_RUNTIME_ARN": agent_runtime_arn,
+        "AGENT_ENDPOINT_NAME": endpoint_name,
+    }
 
     try:
         create_kwargs: dict = {
@@ -241,9 +275,9 @@ def _create_lambda_function(
             "Role": role_arn,
             "Handler": "index.handler",
             "Code": {"ZipFile": zip_bytes},
-            "Timeout": 30,
+            "Timeout": 300,
             "MemorySize": 256,
-            "Environment": {"Variables": {"AGENT_RUNTIME_ARN": agent_runtime_arn}},
+            "Environment": {"Variables": env_vars},
         }
         if tags:
             create_kwargs["Tags"] = tags
@@ -256,7 +290,7 @@ def _create_lambda_function(
             _wait_for_lambda_active(lam, function_name)
             lam.update_function_configuration(
                 FunctionName=function_name,
-                Environment={"Variables": {"AGENT_RUNTIME_ARN": agent_runtime_arn}},
+                Environment={"Variables": env_vars},
             )
             resp = lam.get_function(FunctionName=function_name)
             function_arn = resp["Configuration"]["FunctionArn"]
