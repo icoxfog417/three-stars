@@ -9,28 +9,30 @@ Customize this file with your agent logic.
 import json
 import os
 
-import boto3
+from bedrock_agentcore import BedrockAgentCoreApp
+
+app = BedrockAgentCoreApp()
 
 
-def handler(event, context=None):
+@app.entrypoint
+def handler(request):
     """Handle incoming requests from the frontend.
 
     Args:
-        event: Request payload with 'message' field.
-        context: Runtime context (optional).
+        request: Request payload dict with 'message' field.
 
     Returns:
         Response dict with 'message' field.
     """
-    # Parse the incoming message
-    body = event if isinstance(event, dict) else json.loads(event)
-    user_message = body.get("message", "")
+    user_message = request.get("message") or request.get("prompt", "")
 
     if not user_message:
         return {"message": "Please send a message."}
 
     # Call Bedrock for a response
-    model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-20250514")
+    import boto3
+
+    model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0")
 
     try:
         bedrock = boto3.client("bedrock-runtime")
@@ -55,9 +57,4 @@ def handler(event, context=None):
 
 
 if __name__ == "__main__":
-    import sys
-
-    msg = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Hello!"
-    print(f"You: {msg}")
-    result = handler({"message": msg})
-    print(f"Agent: {result['message']}")
+    app.run()

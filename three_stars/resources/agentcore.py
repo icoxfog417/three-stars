@@ -259,7 +259,7 @@ def _create_agent_runtime(
     role_arn: str,
     description: str = "",
     entry_point: list[str] | None = None,
-    runtime: str = "PYTHON_3_11",
+    runtime: str = "PYTHON_3_13",
 ) -> dict:
     """Create a Bedrock AgentCore runtime."""
     client = session.client("bedrock-agentcore-control")
@@ -298,7 +298,7 @@ def _update_agent_runtime(
     role_arn: str,
     description: str = "",
     entry_point: list[str] | None = None,
-    runtime: str = "PYTHON_3_11",
+    runtime: str = "PYTHON_3_13",
 ) -> dict:
     """Update an existing AgentCore runtime with new code."""
     client = session.client("bedrock-agentcore-control")
@@ -315,6 +315,7 @@ def _update_agent_runtime(
                 "entryPoint": entry_point,
             },
         },
+        "networkConfiguration": {"networkMode": "PUBLIC"},
     }
 
     if description:
