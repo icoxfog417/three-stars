@@ -136,10 +136,10 @@ pip install -e ".[dev]"
 pytest
 
 # Lint
-ruff check src/ tests/
+ruff check three_stars/ tests/
 
 # Format
-ruff format src/ tests/
+ruff format three_stars/ tests/
 ```
 
 ## License

@@ -127,6 +127,19 @@
 - ⬜ T38: Delete `aws/` directory (including unused `cf_function.py`).
 - ⬜ T39: Run full test suite and linter — verify zero regressions, `ruff check` and `ruff format` pass.
 
+## Sprint 5.5: Remove `src/` Directory Nesting
+
+**Goal**: Flatten package layout by removing the `src/` wrapper directory
+**Deliverable**: `three_stars/` package lives at project root instead of `src/three_stars/`
+**Proposal**: `spec/proposals/20260221_dx_review_module_redesign.md` (DX improvements — approved)
+
+### Tasks
+
+- ✅ T50: Move `src/three_stars/` to `three_stars/` at project root — remove `src/` directory
+- ✅ T51: Update `pyproject.toml` — change `[tool.hatch.build.targets.wheel]` packages, `[tool.ruff]` src, and `[tool.pytest.ini_options]` pythonpath for flat layout
+- ✅ T52: Update all spec files and proposals to reference `three_stars/` instead of `src/three_stars/`
+- ✅ T53: Verify `pip install -e .`, tests, and linter work with flat layout
+
 ## Backlog
 
 Items not yet scheduled:
@@ -144,25 +157,24 @@ Items not yet scheduled:
 ```
 three-stars/
 ├── pyproject.toml
-├── src/
-│   └── three_stars/
+├── three_stars/              # Package at project root (flat layout)
+│   ├── __init__.py
+│   ├── cli.py
+│   ├── config.py
+│   ├── state.py             # Typed DeploymentState + per-resource state dataclasses
+│   ├── naming.py            # ResourceNames frozen dataclass
+│   ├── deploy.py            # Orchestrator with typed state
+│   ├── destroy.py           # Reverse-order with typed per-module state
+│   ├── status.py            # Status with typed per-module state
+│   ├── init.py
+│   └── resources/           # Resource modules (replaces aws/)
 │       ├── __init__.py
-│       ├── cli.py
-│       ├── config.py
-│       ├── state.py           # Typed DeploymentState + per-resource state dataclasses
-│       ├── naming.py          # ResourceNames frozen dataclass
-│       ├── deploy.py          # Orchestrator with typed state
-│       ├── destroy.py         # Reverse-order with typed per-module state
-│       ├── status.py          # Status with typed per-module state
-│       ├── init.py
-│       └── resources/         # Resource modules (replaces aws/)
-│           ├── __init__.py
-│           ├── _base.py
-│           ├── agentcore.py
-│           ├── storage.py
-│           ├── api_bridge.py
-│           ├── edge.py
-│           └── cdn.py
+│       ├── _base.py
+│       ├── agentcore.py
+│       ├── storage.py
+│       ├── api_bridge.py
+│       ├── edge.py
+│       └── cdn.py
 ├── tests/
 │   ├── conftest.py
 │   ├── test_cli.py
