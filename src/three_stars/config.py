@@ -39,6 +39,7 @@ class ProjectConfig:
     agent: AgentConfig = field(default_factory=AgentConfig)
     app: AppConfig = field(default_factory=AppConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
+    tags: dict[str, str] = field(default_factory=dict)
     project_dir: Path = field(default_factory=lambda: Path("."))
 
 
@@ -110,12 +111,21 @@ def load_config(
         prefix=api_raw.get("prefix", "/api"),
     )
 
+    # User-defined tags (merged with standard tags later)
+    user_tags = raw.get("tags", {})
+    if not isinstance(user_tags, dict):
+        raise ConfigError(f"'tags' must be a mapping, got {type(user_tags).__name__}")
+    for k, v in user_tags.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise ConfigError(f"Tag key and value must be strings, got {k!r}: {v!r}")
+
     config = ProjectConfig(
         name=name,
         region=region,
         agent=agent,
         app=app,
         api=api,
+        tags=user_tags,
         project_dir=project_path,
     )
 
@@ -168,6 +178,26 @@ def resolve_path(config: ProjectConfig, relative: str) -> Path:
 def get_resource_prefix(config: ProjectConfig) -> str:
     """Generate a prefix for AWS resource names."""
     return f"sss-{config.name}"
+
+
+def get_resource_tags(config: ProjectConfig) -> dict[str, str]:
+    """Compute the merged tag set for AWS resources.
+
+    Standard tags are always applied. User-defined tags from config
+    are merged in, but standard tags take precedence.
+    """
+    standard = {
+        "three-stars:project": config.name,
+        "three-stars:managed-by": "three-stars",
+        "three-stars:region": config.region,
+    }
+    merged = {**config.tags, **standard}
+    return merged
+
+
+def tags_to_aws(tags: dict[str, str]) -> list[dict[str, str]]:
+    """Convert a tags dict to the AWS Tags format: [{"Key": k, "Value": v}]."""
+    return [{"Key": k, "Value": v} for k, v in tags.items()]
 
 
 def get_state_file_path(project_dir: str | Path = ".") -> Path:

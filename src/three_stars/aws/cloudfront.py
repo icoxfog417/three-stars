@@ -48,6 +48,7 @@ def create_distribution(
     index_document: str = "index.html",
     api_prefix: str = "/api",
     comment: str = "",
+    tags: dict[str, str] | None = None,
 ) -> dict:
     """Create a CloudFront distribution with S3 origin and optional Lambda API origin.
 
@@ -188,7 +189,14 @@ def create_distribution(
             "Items": cache_behaviors,
         }
 
-    resp = cf.create_distribution(DistributionConfig=config)
+    if tags:
+        tag_items = [{"Key": k, "Value": v} for k, v in tags.items()]
+        resp = cf.create_distribution_with_tags(
+            DistributionConfig=config,
+            Tags={"Items": tag_items},
+        )
+    else:
+        resp = cf.create_distribution(DistributionConfig=config)
     dist = resp["Distribution"]
 
     return {

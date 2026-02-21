@@ -50,7 +50,7 @@ Parsed from `three-stars.yml`.
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| name | str | Project name (used in resource naming) | required |
+| name | str | Project name (used in resource naming and tagging) | required |
 | region | str | AWS region | us-east-1 |
 | agent.source | str | Path to agent code directory | ./agent |
 | agent.model | str | Bedrock model ID | anthropic.claude-sonnet-4-20250514 |
@@ -60,6 +60,7 @@ Parsed from `three-stars.yml`.
 | app.index | str | Index document filename | index.html |
 | app.error | str | Error document filename | None |
 | api.prefix | str | URL prefix for API routing | /api |
+| tags | dict[str, str] | Custom AWS resource tags (merged with standard tags) | {} |
 
 ### 2.2 DeploymentState
 
@@ -149,7 +150,7 @@ Computed from config + account ID. Frozen dataclass — immutable after creation
 | Command | Arguments | Flags | Description |
 |---------|-----------|-------|-------------|
 | `init` | `[name]` | `--template` | Scaffold new project |
-| `deploy` | `[project_dir]` | `--region`, `--profile`, `--yes` | Deploy to AWS |
+| `deploy` | `[project_dir]` | `--region`, `--profile`, `--yes`, `--force`, `--verbose` | Deploy or update to AWS |
 | `status` | `[project_dir]` | `--region`, `--profile` | Show deployment status |
 | `destroy` | `[project_dir]` | `--region`, `--profile`, `--yes` | Tear down resources |
 
@@ -237,6 +238,65 @@ Each module owns a cohesive resource group (e.g., a Lambda function + its IAM ro
 | `edge.py` | Lambda@Edge function + IAM role (us-east-1) | None |
 | `cdn.py` | CloudFront distribution + OACs + bucket policy | `storage.s3_bucket`, `api_bridge.function_url`, `api_bridge.function_name`, `edge.function_arn` |
 
+### 4.9 Resource Tagging
+
+All AWS resources are tagged with a standard set for cost allocation, filtering, and governance. Tags are computed from the project config and applied during resource creation.
+
+**Standard tags** (always applied):
+
+| Tag Key | Value | Purpose |
+|---------|-------|---------|
+| `three-stars:project` | `config.name` | Cost allocation, resource filtering |
+| `three-stars:managed-by` | `three-stars` | Identify tool-managed resources |
+| `three-stars:region` | `config.region` | Cross-region identification |
+
+**Custom tags**: Users can add custom tags via `three-stars.yml`:
+
+```yaml
+tags:
+  team: platform
+  cost-center: "12345"
+```
+
+Custom tags are merged with standard tags. Standard tags take precedence.
+
+### 4.10 Update Semantics
+
+When `deploy` is run against an existing deployment, each resource follows create-or-update logic:
+
+| Resource | Initial Deploy | Update (redeploy) |
+|----------|---------------|-------------------|
+| IAM roles | Create with tags | Skip (idempotent, tags refreshed) |
+| AgentCore runtime | Create + wait for READY | Re-package agent code + `update_agent_runtime()` |
+| AgentCore endpoint | Create + wait for READY | Skip (reuses existing) |
+| S3 bucket | Create | Skip (already exists) |
+| Frontend files | Upload all | Re-upload all (overwrite) |
+| Lambda bridge | Create function + URL | Update code + configuration |
+| Lambda@Edge | Create + publish version | Skip (code rarely changes) |
+| CloudFront | Create distribution | Skip (config rarely changes) |
+
+**Key fix**: AgentCore runtime code is updated on redeploy. Previously this was skipped entirely, meaning agent code changes were silently ignored.
+
+### 4.11 Recovery Model
+
+**Tier 1: Revert code** (common case — undo a bad agent/frontend change):
+
+```bash
+git checkout HEAD~1 -- agent/ app/
+sss deploy
+```
+
+**Tier 2: Clean slate** (infrastructure is broken):
+
+```bash
+sss destroy --yes
+sss deploy
+```
+
+**State backup**: Before each deploy, the state file is backed up to `.three-stars-state.json.bak`. This allows manual recovery if the new state is corrupted.
+
+**`--force` flag**: Forces re-creation of all resources, ignoring existing state. Useful when AWS state and local state have diverged.
+
 ## 5. Security Architecture
 
 - **Authentication**: Uses standard AWS credential chain (env vars, `~/.aws/credentials`, IAM role)
@@ -249,8 +309,9 @@ Each module owns a cohesive resource group (e.g., a Lambda function + its IAM ro
 - **AWS API errors**: Caught via `botocore.exceptions.ClientError`, mapped to user-friendly messages
 - **Missing credentials**: Detected early, suggest `aws configure`
 - **Invalid config**: Validated before any AWS calls, with specific field-level error messages
-- **Partial deployment failure**: State file written after each successful resource creation, enabling resume/cleanup
+- **Partial deployment failure**: State file written after each successful resource creation, enabling resume/cleanup. State backed up before deploy. Recovery guidance printed on failure.
 - **Resource not found on destroy**: Logged as warning, continue with remaining resources
+- **Deployment progress**: Step-numbered progress with elapsed time (`[1/5] Creating AgentCore... 0:02:15`). Post-deployment health check table printed automatically.
 
 ## 7. Deployment Architecture
 
