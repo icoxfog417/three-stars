@@ -2,7 +2,7 @@
 
 **Date**: 2026-02-21
 **Author**: Claude Agent
-**Status**: Proposed
+**Status**: Approved (Option 1a: OAC + Lambda@Edge)
 
 ## Background
 
@@ -280,47 +280,59 @@ Browser ─→ CloudFront ─→ /api/* ─→ Lambda Function URL (AuthType=NON
 | **Deploy speed improvement** | None | **Frontend: seconds** | None |
 | **Request body limit** | **~1 MB (Lambda@Edge)** | 10 MB (REST API) | 6 MB (Function URL) |
 
-## Recommendation
+## Decision
 
-**API Gateway REST API (Option 2)** is recommended as the primary approach because:
+**Option 1a (OAC + Lambda@Edge)** is chosen as the minimum viable approach:
 
-1. **Parallel deployment** is a real developer-experience win — frontend iteration drops
-   from minutes to seconds.
-2. **No client-side SHA256** — OAC's POST requirement adds unavoidable friction to every
-   API call and every user's frontend code.
-3. **Built-in rate limiting** solves review finding #2 (no rate limiting) via usage plans.
-4. **CORS control** solves review finding #3 (wildcard CORS).
-5. **Future-proof auth** — Cognito authorizers, API keys, Lambda authorizers, and WAF
-   integration provide a clear upgrade path.
-6. **Streaming supported** — REST API streaming (Nov 2025) handles AI agent responses.
-   The 10 MB unrestricted + 2 MB/s throttle is sufficient for text output.
+- Strongest security (SigV4 cryptographic signing)
+- No client-side burden (Lambda@Edge handles SHA256)
+- Minimal code change (~80 lines)
+- No new AWS services or pricing tiers
+- Lambda@Edge deploy is one-time (function never changes)
 
-The $3.50/M request cost is higher than HTTP API but includes more features (WAF, usage
-plans, request validation). For a developer tool with modest traffic, this is acceptable.
+Option 2 (API Gateway REST API) remains a viable future upgrade if parallel deployment
+or built-in rate limiting becomes a priority.
 
-### Why not HTTP API (cheaper)?
+### Implementation Plan
 
-HTTP API ($1/M requests) does NOT support response streaming. Since AI agent responses
-benefit significantly from streaming (progressive text display), REST API is required
-despite the higher per-request cost.
+**Sequence** (respects the chicken-and-egg dependency: CloudFront ARN needed for Lambda
+permission, but CloudFront needs Lambda Function URL to create distribution):
 
-### Implementation Plan (if approved)
+1. **lambda_bridge.py** — Lambda@Edge function + IAM role
+   - Create `create_edge_role()`: IAM role with `lambda.amazonaws.com` + `edgelambda.amazonaws.com` trust
+   - Create `create_edge_function()`: SHA256 hasher in us-east-1, publish version
+   - Create `delete_edge_function()` and `delete_edge_role()` for teardown
 
-1. Create `src/three_stars/aws/apigateway.py` — REST API, resource, method, Lambda
-   proxy integration with `transferMode=STREAM`, deployment, stage
-2. Update `lambda_bridge.py` — remove Function URL creation, remove `Principal=*`,
-   configure Lambda with `InvokeMode=RESPONSE_STREAM`
-3. Update `deploy.py` — split into parallel frontend/backend pipelines
-4. Update `destroy.py` — add API Gateway teardown
-5. Update `cloudfront.py` — remove Lambda origin (CloudFront serves frontend only)
-6. Update `cli.py` — add `--frontend`/`--backend` flags to `deploy`
-7. Update Lambda handler — remove CORS headers, adapt to API Gateway event format
-8. Update state model — add API Gateway resource IDs (rest_api_id, stage_name, etc.)
-9. Update starter template — API URL from config instead of relative `/api/*`
-10. Add CORS configuration on API Gateway (allowed origin = CloudFront domain)
+2. **lambda_bridge.py** — Lambda Function URL auth change
+   - Change `_ensure_function_url()`: `AuthType="NONE"` → `AuthType="AWS_IAM"`
+   - Remove `add_permission(Principal="*")` call
+   - Add `grant_cloudfront_access(function_name, distribution_arn)`: grants
+     `cloudfront.amazonaws.com` with `AWS:SourceArn` condition
+
+3. **cloudfront.py** — Lambda OAC + Lambda@Edge association
+   - Add `create_lambda_oac()`: OAC with `OriginAccessControlOriginType="lambda"`
+   - Modify Lambda origin: attach OAC ID
+   - Modify `/api/*` cache behavior: add `LambdaFunctionAssociations` for
+     origin-request with `IncludeBody=True`
+
+4. **deploy.py** — Updated deployment order
+   - Step 7: Create Lambda (AuthType=AWS_IAM, no public permission yet)
+   - Step 7.5: Create Lambda@Edge role + function (us-east-1)
+   - Step 8: Create CloudFront with Lambda OAC + Lambda@Edge association
+   - Step 8.5: Grant CloudFront → Lambda permission (now we have distribution ARN)
+
+5. **destroy.py** — Updated teardown
+   - Add: delete Lambda@Edge function + role (after CloudFront deletion)
+   - Add: delete Lambda OAC
+
+6. **State model** — New fields
+   - `edge_function_arn` (versioned ARN for CloudFront association)
+   - `edge_role_name`, `edge_role_arn`
+   - `lambda_oac_id`
 
 ## Alternatives Considered
 
-See Options 1 and 3 above. Option 3 (shared secret) could serve as a **quick interim fix**
-while Option 2 is implemented, since it's only ~20 lines of code. However, it should not
-be considered a permanent solution.
+- **Option 2 (API Gateway REST API)**: More features (WAF, throttling, parallel deploy)
+  but higher complexity and $3.50/M cost. Reserved for future if needed.
+- **Option 3 (Shared Secret)**: Too weak for production. Only ~20 lines but
+  obscurity-based, no crypto guarantee.

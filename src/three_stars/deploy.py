@@ -33,6 +33,8 @@ def run_deploy(config: ProjectConfig, profile: str | None = None) -> dict:
     agentcore_role_name = f"{prefix}-role"
     lambda_role_name = f"{prefix}-lambda-role"
     lambda_function_name = f"{prefix}-api-bridge"
+    edge_role_name = f"{prefix}-edge-role"
+    edge_function_name = f"{prefix}-edge-sha256"
     ac_prefix = prefix.replace("-", "_")
     agent_name = f"{ac_prefix}_agent"
     endpoint_name = f"{ac_prefix}_endpoint"
@@ -147,6 +149,26 @@ def run_deploy(config: ProjectConfig, profile: str | None = None) -> dict:
         progress.update(task, description="[green]Lambda API bridge ready")
         progress.remove_task(task)
 
+        # Step 6b: Lambda@Edge function for SHA256 (OAC support)
+        edge_function_arn = state["resources"].get("edge_function_arn")
+        if not edge_function_arn:
+            task = progress.add_task(
+                "Creating Lambda@Edge SHA256 function (us-east-1)...", total=None
+            )
+            edge_role_arn = lambda_bridge.create_edge_role(sess, edge_role_name)
+            state["resources"]["edge_role_name"] = edge_role_name
+            state["resources"]["edge_role_arn"] = edge_role_arn
+            save_state(config.project_dir, state)
+
+            edge_function_arn = lambda_bridge.create_edge_function(
+                sess, edge_function_name, edge_role_arn
+            )
+            state["resources"]["edge_function_name"] = edge_function_name
+            state["resources"]["edge_function_arn"] = edge_function_arn
+            save_state(config.project_dir, state)
+            progress.update(task, description="[green]Lambda@Edge function ready")
+            progress.remove_task(task)
+
         # Step 7: CloudFront Distribution
         existing_dist = state["resources"].get("cloudfront_distribution_id")
         if existing_dist:
@@ -162,12 +184,23 @@ def run_deploy(config: ProjectConfig, profile: str | None = None) -> dict:
                 state["resources"]["oac_id"] = oac_id
                 save_state(config.project_dir, state)
 
+            # Create Lambda OAC (separate from S3 OAC)
+            lambda_oac_id = state["resources"].get("lambda_oac_id")
+            if not lambda_oac_id:
+                lambda_oac_id = cloudfront.create_origin_access_control(
+                    sess, f"{prefix}-lambda-oac", origin_type="lambda"
+                )
+                state["resources"]["lambda_oac_id"] = lambda_oac_id
+                save_state(config.project_dir, state)
+
             dist_info = cloudfront.create_distribution(
                 sess,
                 bucket_name=bucket_name,
                 region=config.region,
                 oac_id=oac_id,
                 lambda_function_url=lambda_info["function_url"],
+                lambda_oac_id=lambda_oac_id,
+                edge_function_arn=edge_function_arn,
                 index_document=config.app.index,
                 api_prefix=config.api.prefix,
                 comment=f"three-stars: {config.name}",
@@ -179,6 +212,11 @@ def run_deploy(config: ProjectConfig, profile: str | None = None) -> dict:
 
             # Set S3 bucket policy for CloudFront access
             s3.set_bucket_policy_for_cloudfront(sess, bucket_name, dist_info["arn"])
+
+            # Grant CloudFront OAC permission to invoke Lambda (needs distribution ARN)
+            lambda_bridge.grant_cloudfront_access(
+                sess, lambda_function_name, dist_info["arn"]
+            )
 
             progress.update(
                 task,

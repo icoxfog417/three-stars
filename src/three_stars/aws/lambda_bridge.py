@@ -236,7 +236,10 @@ def _wait_for_lambda_active(
 
 
 def _ensure_function_url(lam, function_name: str) -> str:
-    """Create or get the function URL for a Lambda function."""
+    """Create or get the function URL for a Lambda function.
+
+    Uses AuthType=AWS_IAM so only CloudFront (via OAC) can invoke it.
+    """
     # Check if URL already exists
     try:
         resp = lam.get_function_url_config(FunctionName=function_name)
@@ -245,26 +248,37 @@ def _ensure_function_url(lam, function_name: str) -> str:
         if e.response["Error"]["Code"] != "ResourceNotFoundException":
             raise
 
-    # Create function URL with no auth (CloudFront handles auth)
+    # Create function URL with IAM auth (CloudFront OAC signs with SigV4)
     resp = lam.create_function_url_config(
         FunctionName=function_name,
-        AuthType="NONE",
+        AuthType="AWS_IAM",
     )
 
-    # Add resource policy to allow public invocation via function URL
+    return resp["FunctionUrl"]
+
+
+def grant_cloudfront_access(
+    session: boto3.Session,
+    function_name: str,
+    distribution_arn: str,
+) -> None:
+    """Grant CloudFront OAC permission to invoke the Lambda function URL.
+
+    Must be called after the CloudFront distribution is created (needs the ARN).
+    """
+    lam = session.client("lambda")
     try:
         lam.add_permission(
             FunctionName=function_name,
-            StatementId="FunctionURLAllowPublicAccess",
+            StatementId="AllowCloudFrontOAC",
             Action="lambda:InvokeFunctionUrl",
-            Principal="*",
-            FunctionUrlAuthType="NONE",
+            Principal="cloudfront.amazonaws.com",
+            SourceArn=distribution_arn,
+            FunctionUrlAuthType="AWS_IAM",
         )
     except ClientError as e:
         if e.response["Error"]["Code"] != "ResourceConflictException":
             raise
-
-    return resp["FunctionUrl"]
 
 
 def delete_lambda_function(session: boto3.Session, function_name: str) -> None:
@@ -284,6 +298,164 @@ def delete_lambda_role(session: boto3.Session, role_name: str) -> None:
     try:
         policies = iam.list_role_policies(RoleName=role_name)
         for policy_name in policies.get("PolicyNames", []):
+            iam.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+        iam.delete_role(RoleName=role_name)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchEntity":
+            return
+        raise
+
+
+# --- Lambda@Edge for SHA256 computation (CloudFront OAC support) ---
+
+_EDGE_FUNCTION_CODE = """\
+'use strict';
+const crypto = require('crypto');
+
+exports.handler = async (event) => {
+    const request = event.Records[0].cf.request;
+    if (request.body && request.body.data) {
+        const bodyData = Buffer.from(request.body.data, request.body.encoding);
+        const hash = crypto.createHash('sha256').update(bodyData).digest('hex');
+        request.headers['x-amz-content-sha256'] = [
+            { key: 'x-amz-content-sha256', value: hash }
+        ];
+    }
+    return request;
+};
+"""
+
+
+def create_edge_role(session: boto3.Session, role_name: str) -> str:
+    """Create an IAM role for the Lambda@Edge function.
+
+    Lambda@Edge requires both lambda.amazonaws.com and edgelambda.amazonaws.com
+    as trusted principals. Returns the role ARN.
+    """
+    iam = session.client("iam")
+
+    trust_policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": [
+                        "lambda.amazonaws.com",
+                        "edgelambda.amazonaws.com",
+                    ]
+                },
+                "Action": "sts:AssumeRole",
+            }
+        ],
+    }
+
+    try:
+        resp = iam.create_role(
+            RoleName=role_name,
+            AssumeRolePolicyDocument=json.dumps(trust_policy),
+            Description="Execution role for three-stars Lambda@Edge SHA256 function",
+        )
+        role_arn = resp["Role"]["Arn"]
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "EntityAlreadyExists":
+            resp = iam.get_role(RoleName=role_name)
+            return resp["Role"]["Arn"]
+        raise
+
+    # Lambda@Edge only needs basic execution (CloudWatch logs)
+    iam.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    )
+
+    # Wait for role propagation
+    time.sleep(10)
+
+    return role_arn
+
+
+def create_edge_function(
+    session: boto3.Session,
+    function_name: str,
+    role_arn: str,
+) -> str:
+    """Create a Lambda@Edge function in us-east-1 that computes SHA256 for OAC.
+
+    Lambda@Edge must be deployed in us-east-1 regardless of project region.
+    Returns the versioned function ARN (required for CloudFront association).
+    """
+    # Lambda@Edge must be in us-east-1
+    lam = session.client("lambda", region_name="us-east-1")
+
+    # Package the edge function
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("index.js", _EDGE_FUNCTION_CODE)
+    zip_bytes = buffer.getvalue()
+
+    try:
+        lam.create_function(
+            FunctionName=function_name,
+            Runtime="nodejs20.x",
+            Role=role_arn,
+            Handler="index.handler",
+            Code={"ZipFile": zip_bytes},
+            Timeout=5,
+            MemorySize=128,
+            Description="Computes SHA256 for CloudFront OAC Lambda origin requests",
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ResourceConflictException":
+            _wait_for_lambda_active(lam, function_name)
+            lam.update_function_code(
+                FunctionName=function_name,
+                ZipFile=zip_bytes,
+            )
+        else:
+            raise
+
+    _wait_for_lambda_active(lam, function_name)
+
+    # Publish a version (Lambda@Edge requires a specific version, not $LATEST)
+    resp = lam.publish_version(
+        FunctionName=function_name,
+        Description="SHA256 edge function for CloudFront OAC",
+    )
+
+    return resp["FunctionArn"]
+
+
+def delete_edge_function(session: boto3.Session, function_name: str) -> None:
+    """Delete the Lambda@Edge function from us-east-1.
+
+    Note: Replicas may take time to be removed after CloudFront dissociation.
+    This may fail if replicas still exist — caller should handle retries.
+    """
+    lam = session.client("lambda", region_name="us-east-1")
+    try:
+        lam.delete_function(FunctionName=function_name)
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "ResourceNotFoundException":
+            return
+        if code == "InvalidParameterValueException" and "replicated" in str(e):
+            # Replicas not yet removed — caller should retry later
+            raise
+        raise
+
+
+def delete_edge_role(session: boto3.Session, role_name: str) -> None:
+    """Delete the Lambda@Edge IAM role."""
+    iam = session.client("iam")
+    try:
+        # Detach managed policies
+        attached = iam.list_attached_role_policies(RoleName=role_name)
+        for policy in attached.get("AttachedPolicies", []):
+            iam.detach_role_policy(RoleName=role_name, PolicyArn=policy["PolicyArn"])
+        # Delete inline policies
+        inline = iam.list_role_policies(RoleName=role_name)
+        for policy_name in inline.get("PolicyNames", []):
             iam.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
         iam.delete_role(RoleName=role_name)
     except ClientError as e:

@@ -72,15 +72,38 @@ def run_destroy(
                 progress.update(task, description=f"[yellow]CloudFront distribution: {e}")
             progress.remove_task(task)
 
-        # 2. OAC
-        oac_id = resources.get("oac_id")
-        if oac_id:
-            task = progress.add_task("Deleting Origin Access Control...", total=None)
+        # 2. OACs (S3 + Lambda)
+        for oac_key, oac_label in [("oac_id", "S3 OAC"), ("lambda_oac_id", "Lambda OAC")]:
+            oac_id = resources.get(oac_key)
+            if oac_id:
+                task = progress.add_task(f"Deleting {oac_label}...", total=None)
+                try:
+                    cloudfront.delete_origin_access_control(sess, oac_id)
+                    progress.update(task, description=f"[green]{oac_label} deleted")
+                except Exception as e:
+                    progress.update(task, description=f"[yellow]{oac_label}: {e}")
+                progress.remove_task(task)
+
+        # 2b. Lambda@Edge function + role (us-east-1)
+        edge_func_name = resources.get("edge_function_name")
+        if edge_func_name:
+            task = progress.add_task("Deleting Lambda@Edge function...", total=None)
             try:
-                cloudfront.delete_origin_access_control(sess, oac_id)
-                progress.update(task, description="[green]OAC deleted")
+                lambda_bridge.delete_edge_function(sess, edge_func_name)
+                progress.update(task, description="[green]Lambda@Edge function deleted")
             except Exception as e:
-                progress.update(task, description=f"[yellow]OAC: {e}")
+                msg = f"[yellow]Lambda@Edge function: {e} (replicas removing)"
+                progress.update(task, description=msg)
+            progress.remove_task(task)
+
+        edge_role_name = resources.get("edge_role_name")
+        if edge_role_name:
+            task = progress.add_task("Deleting Lambda@Edge IAM role...", total=None)
+            try:
+                lambda_bridge.delete_edge_role(sess, edge_role_name)
+                progress.update(task, description="[green]Lambda@Edge IAM role deleted")
+            except Exception as e:
+                progress.update(task, description=f"[yellow]Lambda@Edge IAM role: {e}")
             progress.remove_task(task)
 
         # 3. Lambda bridge function
