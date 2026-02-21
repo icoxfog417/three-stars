@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-three-stars is a CLI tool that deploys AI-powered web applications to AWS with a single command. It provisions a Bedrock AgentCore runtime (AI backend), an S3-backed CloudFront distribution (frontend), and a CloudFront Function (API routing) — the "three stars" of the deployment.
+three-stars is a CLI tool that deploys AI-powered web applications to AWS with a single command. It handles three layers — the "three stars" — of the deployment: a Bedrock AgentCore runtime (AI backend), an S3-backed CloudFront distribution (frontend CDN), and a Lambda API bridge (routing `/api/*` requests to the agent).
 
 ## 2. User Personas
 
@@ -31,7 +31,7 @@ three-stars is a CLI tool that deploys AI-powered web applications to AWS with a
 - **REQ-DEPLOY-002**: The CLI shall create an S3 bucket and upload frontend static files from the `app/` directory
 - **REQ-DEPLOY-003**: The CLI shall create a Bedrock AgentCore runtime with the agent code from the `agent/` directory
 - **REQ-DEPLOY-004**: The CLI shall create a CloudFront distribution with the S3 bucket as origin
-- **REQ-DEPLOY-005**: The CLI shall create a CloudFront Function that routes `/api/*` requests to the AgentCore endpoint
+- **REQ-DEPLOY-005**: The CLI shall create a Lambda API bridge that routes `/api/*` requests to the AgentCore runtime via CloudFront
 - **REQ-DEPLOY-006**: The CLI shall create an IAM execution role for the AgentCore runtime
 - **REQ-DEPLOY-007**: The CLI shall save deployment state to `.three-stars-state.json` for subsequent operations
 - **REQ-DEPLOY-008**: The CLI shall support updating existing deployments (detect existing state and update resources)
@@ -78,15 +78,15 @@ three-stars is a CLI tool that deploys AI-powered web applications to AWS with a
 ## 5. User Stories
 
 ### US-001: First Deployment
-**As a** developer, **I want to** run `three-stars init && three-stars deploy`, **so that** I have a working AI web app URL in minutes without configuring AWS resources manually.
+**As a** developer, **I want to** run `sss init && sss deploy`, **so that** I have a working AI web app URL in minutes without configuring AWS resources manually.
 
 **Acceptance Criteria**:
-- [ ] `three-stars init my-app` creates a project directory with config, frontend, and agent code
-- [ ] `three-stars deploy` in that directory deploys all resources and prints a URL
+- [ ] `sss init my-app` creates a project directory with config, frontend, and agent code
+- [ ] `sss deploy` in that directory deploys all resources and prints a URL
 - [ ] Visiting the URL shows the frontend and `/api/` routes to the agent
 
 ### US-002: Iterating on Code
-**As a** developer, **I want to** run `three-stars deploy` again after changing my code, **so that** my changes are deployed without recreating all resources.
+**As a** developer, **I want to** run `sss deploy` again after changing my code, **so that** my changes are deployed without recreating all resources.
 
 **Acceptance Criteria**:
 - [ ] Running deploy with existing state updates resources instead of creating duplicates
@@ -94,7 +94,7 @@ three-stars is a CLI tool that deploys AI-powered web applications to AWS with a
 - [ ] Agent code changes update the AgentCore runtime
 
 ### US-003: Cleanup
-**As a** developer, **I want to** run `three-stars destroy`, **so that** all AWS resources are deleted and I stop incurring costs.
+**As a** developer, **I want to** run `sss destroy`, **so that** all AWS resources are deleted and I stop incurring costs.
 
 **Acceptance Criteria**:
 - [ ] All 5 resource types are deleted
@@ -103,16 +103,16 @@ three-stars is a CLI tool that deploys AI-powered web applications to AWS with a
 
 ## 6. Constraints and Dependencies
 
-- Requires Python 3.11+
-- Requires valid AWS credentials with permissions for S3, CloudFront, IAM, and Bedrock AgentCore
+- Requires Python 3.12+
+- Requires valid AWS credentials with permissions for S3, CloudFront, IAM, Lambda, and Bedrock AgentCore
 - Amazon Bedrock AgentCore is in preview — API surface may change
 - CloudFront distribution creation takes ~5 minutes for propagation
 
 ## 7. Acceptance Criteria for MVP
 
-- [ ] `three-stars init` scaffolds a valid project
-- [ ] `three-stars deploy` creates all 5 AWS resources and returns a working URL
-- [ ] `three-stars status` displays resource health
-- [ ] `three-stars destroy` tears down all resources
+- [ ] `sss init` scaffolds a valid project
+- [ ] `sss deploy` creates all AWS resources and returns a working URL
+- [ ] `sss status` displays resource health
+- [ ] `sss destroy` tears down all resources
 - [ ] All tests pass without an AWS account (moto mocks)
 - [ ] `pip install` from the repository works
