@@ -86,6 +86,24 @@
 - ✅ T24: Update spec files with final implementation details
 - ✅ T25: Add GitHub Actions CI workflow (lint, test, build)
 
+## Sprint 4.5: DX Improvements
+
+**Goal**: Address developer experience gaps — resource tagging, agent code updates, deployment progress, rollback support
+**Deliverable**: Tags on all resources, agent code updates on redeploy, step-numbered progress with health check, --force/--verbose flags, state backup
+**Proposal**: `spec/proposals/20260221_dx_review_module_redesign.md`
+
+### Tasks
+
+- ✅ T40: Add `tags` field to `ProjectConfig`, parse from `three-stars.yml`, add `get_resource_tags()` and `tags_to_aws()` helpers
+- ✅ T41: Add `backup_state()` to `state.py` — copies state file to `.json.bak` before deploys
+- ✅ T42: Add `update_agent_runtime()` to `aws/agentcore.py` — re-packages and updates agent code on existing runtime
+- ✅ T43: Add `tag_bucket()` to `aws/s3.py` — applies tags via `put_bucket_tagging()`
+- ✅ T44: Add `tags` parameter to all Lambda/IAM role creation in `aws/lambda_bridge.py`
+- ✅ T45: Add `tags` parameter to CloudFront distribution creation in `aws/cloudfront.py`
+- ✅ T46: Rewrite `deploy.py` — update-in-place for AgentCore, tags on all resources, step-numbered progress with elapsed time, state backup before deploy, post-deployment health check
+- ✅ T47: Add `--force` and `--verbose` flags to CLI `deploy` command, add recovery guidance on failure
+- ✅ T48: Update `spec/tasks.md` and `spec/design.md` to reflect DX improvements
+
 ## Sprint 5: Module Structure Redesign
 
 **Goal**: Reorganize from service-based `aws/` modules to resource-based `resources/` modules with typed state

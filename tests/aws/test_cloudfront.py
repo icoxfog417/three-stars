@@ -32,9 +32,7 @@ class TestOriginAccessControl:
 
     def test_create_lambda_oac(self):
         session = boto3.Session(region_name="us-east-1")
-        oac_id = create_origin_access_control(
-            session, "test-lambda-oac", origin_type="lambda"
-        )
+        oac_id = create_origin_access_control(session, "test-lambda-oac", origin_type="lambda")
         assert oac_id
 
         cf = session.client("cloudfront")
@@ -68,9 +66,7 @@ class TestDistribution:
         session = boto3.Session(region_name="us-east-1")
         self._setup_s3_bucket(session)
         s3_oac_id = create_origin_access_control(session, "s3-oac")
-        lambda_oac_id = create_origin_access_control(
-            session, "lambda-oac", origin_type="lambda"
-        )
+        lambda_oac_id = create_origin_access_control(session, "lambda-oac", origin_type="lambda")
 
         result = create_distribution(
             session,
@@ -89,9 +85,7 @@ class TestDistribution:
         resp = cf.get_distribution(Id=result["distribution_id"])
         origins = resp["Distribution"]["DistributionConfig"]["Origins"]["Items"]
 
-        lambda_origin = next(
-            (o for o in origins if o["Id"] == "Lambda-API-Bridge"), None
-        )
+        lambda_origin = next((o for o in origins if o["Id"] == "Lambda-API-Bridge"), None)
         assert lambda_origin is not None
         assert lambda_origin["DomainName"] == "abc123.lambda-url.us-east-1.on.aws"
 

@@ -72,6 +72,7 @@ def create_lambda_role(
     role_name: str,
     account_id: str,
     region: str,
+    tags: list[dict[str, str]] | None = None,
 ) -> str:
     """Create an IAM role for the Lambda bridge function.
 
@@ -91,16 +92,22 @@ def create_lambda_role(
     }
 
     try:
-        resp = iam.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(trust_policy),
-            Description="Execution role for three-stars Lambda bridge",
-        )
+        create_kwargs: dict = {
+            "RoleName": role_name,
+            "AssumeRolePolicyDocument": json.dumps(trust_policy),
+            "Description": "Execution role for three-stars Lambda bridge",
+        }
+        if tags:
+            create_kwargs["Tags"] = tags
+        resp = iam.create_role(**create_kwargs)
         role_arn = resp["Role"]["Arn"]
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
             resp = iam.get_role(RoleName=role_name)
-            return resp["Role"]["Arn"]
+            role_arn = resp["Role"]["Arn"]
+            if tags:
+                iam.tag_role(RoleName=role_name, Tags=tags)
+            return role_arn
         raise
 
     # Attach basic Lambda execution + AgentCore invoke permissions
@@ -144,6 +151,7 @@ def create_lambda_function(
     role_arn: str,
     agent_runtime_arn: str,
     region: str,
+    tags: dict[str, str] | None = None,
 ) -> dict:
     """Create the Lambda bridge function with a function URL.
 
@@ -155,20 +163,23 @@ def create_lambda_function(
 
     # Create the function
     try:
-        resp = lam.create_function(
-            FunctionName=function_name,
-            Runtime="python3.11",
-            Role=role_arn,
-            Handler="index.handler",
-            Code={"ZipFile": zip_bytes},
-            Timeout=30,
-            MemorySize=256,
-            Environment={
+        create_kwargs: dict = {
+            "FunctionName": function_name,
+            "Runtime": "python3.11",
+            "Role": role_arn,
+            "Handler": "index.handler",
+            "Code": {"ZipFile": zip_bytes},
+            "Timeout": 30,
+            "MemorySize": 256,
+            "Environment": {
                 "Variables": {
                     "AGENT_RUNTIME_ARN": agent_runtime_arn,
                 }
             },
-        )
+        }
+        if tags:
+            create_kwargs["Tags"] = tags
+        resp = lam.create_function(**create_kwargs)
         function_arn = resp["FunctionArn"]
     except ClientError as e:
         if e.response["Error"]["Code"] == "ResourceConflictException":
@@ -222,8 +233,7 @@ def _wait_for_lambda_active(
             return
         if state == "Failed":
             raise RuntimeError(
-                f"Lambda function {function_name} failed: "
-                f"{config.get('StateReason', 'unknown')}"
+                f"Lambda function {function_name} failed: {config.get('StateReason', 'unknown')}"
             )
         if last_update == "Failed":
             raise RuntimeError(
@@ -326,7 +336,11 @@ exports.handler = async (event) => {
 """
 
 
-def create_edge_role(session: boto3.Session, role_name: str) -> str:
+def create_edge_role(
+    session: boto3.Session,
+    role_name: str,
+    tags: list[dict[str, str]] | None = None,
+) -> str:
     """Create an IAM role for the Lambda@Edge function.
 
     Lambda@Edge requires both lambda.amazonaws.com and edgelambda.amazonaws.com
@@ -351,16 +365,22 @@ def create_edge_role(session: boto3.Session, role_name: str) -> str:
     }
 
     try:
-        resp = iam.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(trust_policy),
-            Description="Execution role for three-stars Lambda@Edge SHA256 function",
-        )
+        create_kwargs: dict = {
+            "RoleName": role_name,
+            "AssumeRolePolicyDocument": json.dumps(trust_policy),
+            "Description": "Execution role for three-stars Lambda@Edge SHA256 function",
+        }
+        if tags:
+            create_kwargs["Tags"] = tags
+        resp = iam.create_role(**create_kwargs)
         role_arn = resp["Role"]["Arn"]
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
             resp = iam.get_role(RoleName=role_name)
-            return resp["Role"]["Arn"]
+            role_arn = resp["Role"]["Arn"]
+            if tags:
+                iam.tag_role(RoleName=role_name, Tags=tags)
+            return role_arn
         raise
 
     # Lambda@Edge only needs basic execution (CloudWatch logs)
@@ -395,6 +415,7 @@ def create_edge_function(
     session: boto3.Session,
     function_name: str,
     role_arn: str,
+    tags: dict[str, str] | None = None,
 ) -> str:
     """Create a Lambda@Edge function in us-east-1 that computes SHA256 for OAC.
 
@@ -411,16 +432,19 @@ def create_edge_function(
     zip_bytes = buffer.getvalue()
 
     try:
-        lam.create_function(
-            FunctionName=function_name,
-            Runtime="nodejs20.x",
-            Role=role_arn,
-            Handler="index.handler",
-            Code={"ZipFile": zip_bytes},
-            Timeout=5,
-            MemorySize=128,
-            Description="Computes SHA256 for CloudFront OAC Lambda origin requests",
-        )
+        create_kwargs: dict = {
+            "FunctionName": function_name,
+            "Runtime": "nodejs20.x",
+            "Role": role_arn,
+            "Handler": "index.handler",
+            "Code": {"ZipFile": zip_bytes},
+            "Timeout": 5,
+            "MemorySize": 128,
+            "Description": "Computes SHA256 for CloudFront OAC Lambda origin requests",
+        }
+        if tags:
+            create_kwargs["Tags"] = tags
+        lam.create_function(**create_kwargs)
     except ClientError as e:
         if e.response["Error"]["Code"] == "ResourceConflictException":
             _wait_for_lambda_active(lam, function_name)

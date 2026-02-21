@@ -59,6 +59,7 @@ def create_iam_role(
     session: boto3.Session,
     role_name: str,
     account_id: str,
+    tags: list[dict[str, str]] | None = None,
 ) -> str:
     """Create an IAM role for AgentCore runtime execution.
 
@@ -78,16 +79,22 @@ def create_iam_role(
     }
 
     try:
-        resp = iam.create_role(
-            RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps(trust_policy),
-            Description="Execution role for three-stars AgentCore runtime",
-        )
+        create_kwargs: dict = {
+            "RoleName": role_name,
+            "AssumeRolePolicyDocument": json.dumps(trust_policy),
+            "Description": "Execution role for three-stars AgentCore runtime",
+        }
+        if tags:
+            create_kwargs["Tags"] = tags
+        resp = iam.create_role(**create_kwargs)
         role_arn = resp["Role"]["Arn"]
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
             resp = iam.get_role(RoleName=role_name)
-            return resp["Role"]["Arn"]
+            role_arn = resp["Role"]["Arn"]
+            if tags:
+                iam.tag_role(RoleName=role_name, Tags=tags)
+            return role_arn
         raise
 
     # Attach policy for Bedrock model invocation and S3 code access
@@ -184,6 +191,74 @@ def create_agent_runtime(
     runtime_arn = resp["agentRuntimeArn"]
 
     # Wait for runtime to become ready
+    _wait_for_runtime_ready(client, runtime_id)
+
+    return {
+        "runtime_id": runtime_id,
+        "runtime_arn": runtime_arn,
+    }
+
+
+def update_agent_runtime(
+    session: boto3.Session,
+    runtime_id: str,
+    s3_bucket: str,
+    s3_key: str,
+    role_arn: str,
+    description: str = "",
+    entry_point: list[str] | None = None,
+    runtime: str = "PYTHON_3_11",
+    environment_variables: dict[str, str] | None = None,
+) -> dict:
+    """Update an existing AgentCore runtime with new code.
+
+    Args:
+        session: boto3 session.
+        runtime_id: Existing runtime ID to update.
+        s3_bucket: S3 bucket containing new agent code.
+        s3_key: S3 key of the new agent zip package.
+        role_arn: IAM execution role ARN.
+        description: Runtime description.
+        entry_point: Entry point command list.
+        runtime: Python runtime version.
+        environment_variables: Environment variables for the runtime.
+
+    Returns:
+        Dict with 'runtime_id' and 'runtime_arn'.
+    """
+    client = session.client("bedrock-agentcore-control")
+
+    if entry_point is None:
+        entry_point = ["agent.py"]
+
+    kwargs: dict = {
+        "agentRuntimeId": runtime_id,
+        "agentRuntimeArtifact": {
+            "codeConfiguration": {
+                "code": {
+                    "s3": {
+                        "bucket": s3_bucket,
+                        "prefix": s3_key,
+                    },
+                },
+                "runtime": runtime,
+                "entryPoint": entry_point,
+            },
+        },
+    }
+
+    if description:
+        kwargs["description"] = description
+    if role_arn:
+        kwargs["roleArn"] = role_arn
+    if environment_variables:
+        kwargs["environmentVariables"] = environment_variables
+
+    resp = client.update_agent_runtime(**kwargs)
+
+    runtime_arn = resp["agentRuntimeArn"]
+
+    # Wait for runtime to finish updating
     _wait_for_runtime_ready(client, runtime_id)
 
     return {

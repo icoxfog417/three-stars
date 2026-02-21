@@ -44,6 +44,25 @@ def create_bucket(session: boto3.Session, bucket_name: str, region: str) -> str:
     return bucket_name
 
 
+def tag_bucket(
+    session: boto3.Session,
+    bucket_name: str,
+    tags: list[dict[str, str]],
+) -> None:
+    """Apply tags to an S3 bucket.
+
+    Args:
+        session: boto3 session.
+        bucket_name: S3 bucket name.
+        tags: List of {"Key": k, "Value": v} dicts.
+    """
+    s3 = session.client("s3")
+    s3.put_bucket_tagging(
+        Bucket=bucket_name,
+        Tagging={"TagSet": tags},
+    )
+
+
 def set_bucket_policy_for_cloudfront(
     session: boto3.Session,
     bucket_name: str,

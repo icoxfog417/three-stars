@@ -29,11 +29,22 @@ def main() -> None:
 @click.option("--region", default=None, help="AWS region (overrides config file).")
 @click.option("--profile", default=None, help="AWS CLI profile name.")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts.")
-def deploy(project_dir: str, region: str | None, profile: str | None, yes: bool) -> None:
+@click.option("--force", is_flag=True, help="Force re-creation of all resources.")
+@click.option("--verbose", "-v", is_flag=True, help="Print detailed progress.")
+def deploy(
+    project_dir: str,
+    region: str | None,
+    profile: str | None,
+    yes: bool,
+    force: bool,
+    verbose: bool,
+) -> None:
     """Deploy the project to AWS.
 
     Reads three-stars.yml from PROJECT_DIR, provisions AWS resources,
     and prints the CloudFront URL.
+
+    Use --force to re-create all resources from scratch.
     """
     try:
         config = load_config(project_dir, region_override=region)
@@ -52,12 +63,21 @@ def deploy(project_dir: str, region: str | None, profile: str | None, yes: bool)
     from three_stars.deploy import run_deploy
 
     try:
-        result = run_deploy(config, profile=profile)
+        result = run_deploy(config, profile=profile, force=force, verbose=verbose)
         console.print()
         console.print("[bold green]Deployed successfully![/bold green]")
         console.print(f"[bold]URL:[/bold] https://{result['cloudfront_domain']}")
+        console.print()
+        console.print("[dim]Recovery commands:[/dim]")
+        console.print("[dim]  Revert code: git checkout HEAD~1 -- agent/ app/ && sss deploy[/dim]")
+        console.print("[dim]  Clean slate: sss destroy --yes && sss deploy[/dim]")
     except Exception as e:
         err_console.print(f"[red]Deployment failed:[/red] {e}")
+        err_console.print()
+        err_console.print("[yellow]State has been saved. To recover:[/yellow]")
+        err_console.print("  Check status:  sss status")
+        err_console.print("  Retry deploy:  sss deploy")
+        err_console.print("  Clean up:      sss destroy")
         sys.exit(1)
 
 

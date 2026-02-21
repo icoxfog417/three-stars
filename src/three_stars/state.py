@@ -38,6 +38,22 @@ def save_state(project_dir: str | Path, state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
+def backup_state(project_dir: str | Path) -> Path | None:
+    """Backup the state file before a new deployment.
+
+    Copies .three-stars-state.json to .three-stars-state.json.bak.
+    Returns the backup path, or None if no state file exists.
+    """
+    state_path = get_state_path(project_dir)
+    if not state_path.exists():
+        return None
+    backup_path = state_path.with_suffix(".json.bak")
+    import shutil
+
+    shutil.copy2(state_path, backup_path)
+    return backup_path
+
+
 def delete_state(project_dir: str | Path) -> None:
     """Delete the state file."""
     state_path = get_state_path(project_dir)
