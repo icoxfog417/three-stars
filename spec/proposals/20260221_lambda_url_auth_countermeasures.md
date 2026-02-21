@@ -79,6 +79,40 @@ fetch("/api/chat", {
 This adds friction to every API call from the frontend. The starter template and
 all user frontend code must include this pattern.
 
+### Variant 1a: Lambda@Edge computes SHA256
+
+Instead of requiring the client to compute SHA256, use Lambda@Edge on the
+origin-request event to compute it server-side:
+
+```
+Browser ─→ CloudFront ─→ Lambda@Edge (origin-request) ─→ Lambda Function URL
+             (OAC)        reads body, computes SHA256,      (AuthType=AWS_IAM)
+                          sets x-amz-content-sha256 header
+```
+
+This eliminates the client burden entirely. The Lambda@Edge function is small:
+
+```javascript
+exports.handler = async (event) => {
+  const request = event.Records[0].cf.request;
+  if (request.body && request.body.data) {
+    const crypto = require('crypto');
+    const bodyData = Buffer.from(request.body.data, request.body.encoding);
+    const hash = crypto.createHash('sha256').update(bodyData).digest('hex');
+    request.headers['x-amz-content-sha256'] = [{ key: 'x-amz-content-sha256', value: hash }];
+  }
+  return request;
+};
+```
+
+**Key constraint**: Lambda@Edge "include body" option limits request body to **~1 MB**.
+For AI agent text prompts this is likely sufficient (1 MB ≈ ~500K characters of text),
+but it is a hard ceiling — requests with bodies exceeding 1 MB will be truncated.
+
+**Lambda@Edge does NOT interfere with response streaming**: it only runs on the
+origin-request event. The response streams directly from the Function URL through
+CloudFront to the client.
+
 ### Evaluation
 
 | Criterion | Rating | Notes |
@@ -86,9 +120,10 @@ all user frontend code must include this pattern.
 | Security | **Strong** | Cryptographic SigV4, direct URL access blocked |
 | Streaming | **Yes** | Lambda Function URL RESPONSE_STREAM works with OAC |
 | Parallel deploy | **No** | CloudFront still couples frontend + backend |
-| Complexity | **Low-Medium** | Reuses existing OAC pattern, but client-side SHA256 is friction |
-| Cost | **Free** | No additional AWS charges |
-| Client burden | **High** | Every POST must compute SHA256 hash |
+| Complexity | **Low-Medium** | OAC + small Lambda@Edge function |
+| Cost | **~Free** | Lambda@Edge pricing is negligible at low volume |
+| Client burden | **None** (with 1a) | Lambda@Edge handles SHA256 transparently |
+| Request body limit | **~1 MB** | Lambda@Edge "include body" hard limit |
 
 ---
 
@@ -231,19 +266,19 @@ Browser ─→ CloudFront ─→ /api/* ─→ Lambda Function URL (AuthType=NON
 
 ## Comparison Summary
 
-| | OAC for Lambda | API Gateway (REST) | Shared Secret |
+| | OAC + Lambda@Edge (1a) | API Gateway (REST) | Shared Secret |
 |---|---|---|---|
-| **Security** | Strong (SigV4) | Good (throttling, WAF) | Weak (obscurity) |
+| **Security** | **Strong (SigV4)** | Good (throttling, WAF) | Weak (obscurity) |
 | **Streaming** | Yes (Function URL) | Yes (since Nov 2025, 10MB+2MB/s) | Yes |
 | **Parallel deploy** | No | **Yes** | No |
-| **Client SHA256 needed** | **Yes (friction)** | No | No |
+| **Client SHA256 needed** | **No (Lambda@Edge)** | No | No |
 | **Fixes wildcard CORS** | No (manual) | **Yes** | No (manual) |
 | **Rate limiting** | Need Lambda concurrency | **Built-in (usage plans)** | Need Lambda concurrency |
 | **Future auth path** | Limited | **Cognito, API keys, WAF** | Limited |
-| **Implementation size** | ~50 lines changed | ~250 lines new module | ~20 lines changed |
-| **Additional cost** | Free | $3.50/M requests | Free |
+| **Implementation size** | ~80 lines changed | ~250 lines new module | ~20 lines changed |
+| **Additional cost** | ~Free | $3.50/M requests | Free |
 | **Deploy speed improvement** | None | **Frontend: seconds** | None |
-| **Lambda@Edge needed** | No (native OAC) | No | No |
+| **Request body limit** | **~1 MB (Lambda@Edge)** | 10 MB (REST API) | 6 MB (Function URL) |
 
 ## Recommendation
 
