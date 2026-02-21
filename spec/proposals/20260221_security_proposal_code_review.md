@@ -306,11 +306,12 @@ for key in [
 
 ## Summary
 
-### Addressed (3 of 14)
+### Addressed (4 of 14)
 
 | # | Finding | Resolution |
 |---|---------|------------|
 | 1 | Unauthenticated Lambda Function URL | **Fixed** — `AuthType=AWS_IAM` + CloudFront OAC + Lambda@Edge SHA256 |
+| 3 | Wildcard CORS | **Resolved** — removed CORS headers; same-origin + OAC makes them unnecessary |
 | 8 | No resource tagging | **Fixed** — all resources tagged with standard + custom tags |
 | 11 | `callable` vs `Callable` | **Resolved** — old file deleted during redesign |
 
@@ -320,12 +321,11 @@ for key in [
 |---|---------|--------|
 | 5 | No tests for critical modules | Resource modules now have tests; orchestrators still have none |
 
-### Not Addressed (10 of 14)
+### Not Addressed (9 of 14)
 
 | # | Finding | Severity |
 |---|---------|----------|
 | 2 | No rate limiting | Critical |
-| 3 | Wildcard CORS | Critical |
 | 4 | `destroy` deletes state on partial failure | High |
 | 6 | No Lambda concurrency limit | High |
 | 7 | No WAF on CloudFront | Medium |
