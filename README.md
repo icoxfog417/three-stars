@@ -2,11 +2,11 @@
 
 Deploy AI-powered web applications to AWS with a single command.
 
-**three-stars** provisions three AWS resources — the "three stars" of your deployment:
+**three-stars** handles three layers of your deployment — the "three stars":
 
-1. **Amazon Bedrock AgentCore** — Hosts your AI agent backend
-2. **Amazon CloudFront + S3** — Serves your static frontend via CDN
-3. **CloudFront Functions** — Routes `/api/*` requests to the agent
+1. **AI Backend** — Amazon Bedrock AgentCore hosts your agent code
+2. **Frontend CDN** — Amazon CloudFront + S3 serves your static site
+3. **API Bridge** — Lambda routes `/api/*` requests to your agent
 
 ## Quick Start
 
@@ -16,10 +16,12 @@ Deploy AI-powered web applications to AWS with a single command.
 pip install three-stars
 ```
 
+This installs the `sss` command (short for **s**imple **s**erverless **s**tack).
+
 ### Create a project
 
 ```bash
-three-stars init my-app
+sss init my-app
 cd my-app
 ```
 
@@ -35,37 +37,45 @@ my-app/
     └── requirements.txt
 ```
 
+### Test locally
+
+```bash
+python agent/agent.py "What is Amazon Bedrock?"
+```
+
+This calls your agent handler directly. Requires AWS credentials (`aws configure`) since the starter agent invokes a Bedrock model.
+
 ### Deploy
 
 ```bash
-three-stars deploy
+sss deploy
 ```
 
 This provisions all AWS resources and prints your CloudFront URL:
 
 ```
-✓ IAM role ready
-✓ S3 bucket ready
-✓ Uploaded 2 files
-✓ Agent packaged
-✓ AgentCore runtime active
-✓ CloudFront Function ready
-✓ CloudFront distribution created
+[1/5] S3 storage ready
+[2/5] AgentCore ready
+[3/5] Lambda API bridge ready
+[4/5] Lambda@Edge function ready
+[5/5] CloudFront distribution created (propagation ~5-10 min)
 
 Deployed successfully!
 URL: https://d1234567890.cloudfront.net
 ```
 
+The five steps map to the three stars: **AI Backend** (steps 2), **Frontend CDN** (steps 1, 5), and **API Bridge** (steps 3, 4).
+
 ### Check status
 
 ```bash
-three-stars status
+sss status
 ```
 
 ### Tear down
 
 ```bash
-three-stars destroy
+sss destroy
 ```
 
 ## Configuration
@@ -97,6 +107,8 @@ api:
 | `--region` | Override AWS region |
 | `--profile` | AWS CLI profile name |
 | `--yes` / `-y` | Skip confirmation prompts |
+| `--force` | Recreate all resources from scratch |
+| `--verbose` / `-v` | Print detailed progress |
 
 ## Architecture
 
@@ -106,8 +118,9 @@ User Browser
     ▼
 CloudFront Distribution (HTTPS CDN)
     ├── /* ──────────► S3 Bucket (static frontend)
-    └── /api/* ──────► CloudFront Function ──► Bedrock AgentCore
-                        (URL router)            (AI agent runtime)
+    └── /api/* ──────► Lambda API Bridge ──► Bedrock AgentCore
+                        (via Lambda@Edge      (AI agent runtime)
+                         OAC signing)
 ```
 
 ### AWS Resources Created
@@ -116,30 +129,31 @@ CloudFront Distribution (HTTPS CDN)
 |----------|---------|---------|
 | S3 Bucket | Amazon S3 | Frontend static files (private, OAC access) |
 | AgentCore Runtime | Bedrock AgentCore | Runs AI agent code with Bedrock model access |
+| Lambda Function | AWS Lambda | Bridges API requests to AgentCore |
+| Lambda@Edge Function | AWS Lambda@Edge | Computes SHA256 for OAC request signing |
 | CloudFront Distribution | Amazon CloudFront | CDN with HTTPS |
-| CloudFront Function | CloudFront Functions | Routes API requests to AgentCore |
-| IAM Role | AWS IAM | AgentCore execution permissions |
+| IAM Roles | AWS IAM | Execution permissions (AgentCore, Lambda, Lambda@Edge) |
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - AWS credentials configured (`aws configure`)
-- Permissions for S3, CloudFront, IAM, and Bedrock AgentCore
+- Permissions for S3, CloudFront, IAM, Lambda, and Bedrock AgentCore
 
 ## Development
 
 ```bash
 # Install in development mode
-pip install -e ".[dev]"
+uv sync
 
 # Run tests
-pytest
+uv run pytest
 
 # Lint
-ruff check three_stars/ tests/
+uv run ruff check three_stars/ tests/
 
 # Format
-ruff format three_stars/ tests/
+uv run ruff format three_stars/ tests/
 ```
 
 ## License

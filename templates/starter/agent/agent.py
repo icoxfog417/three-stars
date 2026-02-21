@@ -52,3 +52,12 @@ def handler(event, context=None):
         assistant_message = f"I'm having trouble connecting to the model. Error: {e}"
 
     return {"message": assistant_message}
+
+
+if __name__ == "__main__":
+    import sys
+
+    msg = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Hello!"
+    print(f"You: {msg}")
+    result = handler({"message": msg})
+    print(f"Agent: {result['message']}")

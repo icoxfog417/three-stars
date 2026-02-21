@@ -2,7 +2,7 @@
 
 **Project**: three-stars
 **Last Updated**: 2026-02-21
-**Status**: Sprint 5 - Module Structure Redesign
+**Status**: Sprint 6 - DX Review P0/P1 Fixes
 
 ## Task Status Legend
 
@@ -139,6 +139,22 @@
 - ✅ T51: Update `pyproject.toml` — change `[tool.hatch.build.targets.wheel]` packages, `[tool.ruff]` src, and `[tool.pytest.ini_options]` pythonpath for flat layout
 - ✅ T52: Update all spec files and proposals to reference `three_stars/` instead of `src/three_stars/`
 - ✅ T53: Verify `pip install -e .`, tests, and linter work with flat layout
+
+## Sprint 6: DX Review P0/P1 Fixes
+
+**Goal**: Fix critical documentation-implementation mismatches and improve first-run experience
+**Deliverable**: README matches actual CLI, architecture docs are accurate, agent template supports local testing
+**Proposal**: `spec/proposals/20260221_apply_dx_review_p0_p1_fixes.md`
+
+### Tasks
+
+- ✅ T54: Add `three-stars` as secondary entry point in `pyproject.toml` alongside `sss`
+- ✅ T55: Rewrite README.md — fix CLI name (`sss`), Python version (3.12+), architecture (Lambda not CloudFront Functions), deploy output (5-step), add `--force`/`--verbose` flags, update dev section to use `uv`
+- ✅ T56: Update architecture diagram — replace CloudFront Functions with Lambda API Bridge + Lambda@Edge
+- ✅ T57: Add `if __name__ == "__main__"` local testing block to `templates/starter/agent/agent.py`
+- ✅ T58: Update `spec/requirements.md` — fix CloudFront Function refs to Lambda, fix Python 3.11+ to 3.12+, fix CLI name in user stories
+- ✅ T59: Update `spec/design.md` — fix CLI entry point reference, fix deploy sequence order
+- ✅ T60: Run full test suite and linter — verify zero regressions
 
 ## Backlog
 

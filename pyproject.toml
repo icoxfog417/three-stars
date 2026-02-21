@@ -39,6 +39,7 @@ dev = [
 
 [project.scripts]
 sss = "three_stars.cli:main"
+three-stars = "three_stars.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/icoxfog417/three-stars"

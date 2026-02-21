@@ -201,8 +201,8 @@ Computed from config + account ID. Frozen dataclass — immutable after creation
 **Outputs**: `DeploymentState` saved to disk
 **Design**: The orchestrator is the explicit dependency manager — it passes typed outputs from earlier resources as inputs to later ones. Resource modules never reference each other.
 **Sequence**:
-1. AgentCore: IAM role + runtime + endpoint → `AgentCoreState`
-2. Storage: S3 bucket + frontend upload → `StorageState`
+1. Storage: S3 bucket + frontend upload → `StorageState`
+2. AgentCore: IAM role + runtime + endpoint (needs `s3_bucket`) → `AgentCoreState`
 3. API Bridge: Lambda function + role (needs `runtime_arn`) → `ApiBridgeState`
 4. Edge: Lambda@Edge function + role → `EdgeState`
 5. CDN: CloudFront distribution + OACs (needs bucket, function URL, edge ARN) → `CdnState`
@@ -319,9 +319,9 @@ The tool itself is a Python package installed via pip. It deploys user applicati
 
 ```
 pip install three-stars
-  └── Installs CLI entry point `three-stars`
+  └── Installs CLI entry points: `sss` and `three-stars`
 
-three-stars deploy
+sss deploy
   └── Orchestrator creates resources via resource modules
       ├── agentcore: IAM role + runtime + endpoint
       ├── storage: S3 bucket + frontend files
