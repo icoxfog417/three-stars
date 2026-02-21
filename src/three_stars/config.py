@@ -67,7 +67,7 @@ def load_config(
     if not config_path.exists():
         raise ConfigError(
             f"Config file not found: {config_path}\n"
-            f"Run 'three-stars init' to create a new project, "
+            f"Run 'sss init' to create a new project, "
             f"or ensure you're in the correct directory."
         )
 
@@ -167,7 +167,7 @@ def resolve_path(config: ProjectConfig, relative: str) -> Path:
 
 def get_resource_prefix(config: ProjectConfig) -> str:
     """Generate a prefix for AWS resource names."""
-    return f"three-stars-{config.name}"
+    return f"sss-{config.name}"
 
 
 def get_state_file_path(project_dir: str | Path = ".") -> Path:

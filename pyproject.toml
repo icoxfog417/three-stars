@@ -34,12 +34,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "moto[s3,cloudfront,iam,sts]>=5.0",
+    "moto[s3,cloudfront,iam,sts,lambda]>=5.0",
     "ruff>=0.9",
 ]
 
 [project.scripts]
-three-stars = "three_stars.cli:main"
+sss = "three_stars.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/icoxfog417/three-stars"

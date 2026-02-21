@@ -6,7 +6,7 @@ import click
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from three_stars.aws import agentcore, cf_function, cloudfront, s3, session
+from three_stars.aws import agentcore, cloudfront, lambda_bridge, s3, session
 from three_stars.state import delete_state, load_state
 
 console = Console()
@@ -39,7 +39,11 @@ def run_destroy(
     console.print(msg)
     console.print("\nResources to be deleted:")
     for key, value in resources.items():
-        if not key.endswith("_name") or key == "cloudfront_function_name":
+        if not key.endswith("_name") or key in (
+            "cloudfront_function_name",
+            "lambda_function_name",
+            "agentcore_endpoint_name",
+        ):
             console.print(f"  - {key}: {value}")
 
     if not skip_confirm and not click.confirm("\nThis action is irreversible. Continue?"):
@@ -79,19 +83,41 @@ def run_destroy(
                 progress.update(task, description=f"[yellow]OAC: {e}")
             progress.remove_task(task)
 
-        # 3. CloudFront Function
-        cf_func_name = resources.get("cloudfront_function_name")
-        if cf_func_name:
-            task = progress.add_task("Deleting CloudFront Function...", total=None)
+        # 3. Lambda bridge function
+        lambda_func_name = resources.get("lambda_function_name")
+        if lambda_func_name:
+            task = progress.add_task("Deleting Lambda bridge function...", total=None)
             try:
-                cf_function.delete_function(sess, cf_func_name)
-                progress.update(task, description="[green]CloudFront Function deleted")
+                lambda_bridge.delete_lambda_function(sess, lambda_func_name)
+                progress.update(task, description="[green]Lambda function deleted")
             except Exception as e:
-                progress.update(task, description=f"[yellow]CloudFront Function: {e}")
+                progress.update(task, description=f"[yellow]Lambda function: {e}")
             progress.remove_task(task)
 
-        # 4. AgentCore Runtime
+        # 4. Lambda IAM role
+        lambda_role_name = resources.get("lambda_role_name")
+        if lambda_role_name:
+            task = progress.add_task("Deleting Lambda IAM role...", total=None)
+            try:
+                lambda_bridge.delete_lambda_role(sess, lambda_role_name)
+                progress.update(task, description="[green]Lambda IAM role deleted")
+            except Exception as e:
+                progress.update(task, description=f"[yellow]Lambda IAM role: {e}")
+            progress.remove_task(task)
+
+        # 5. AgentCore endpoint
         runtime_id = resources.get("agentcore_runtime_id")
+        endpoint_name = resources.get("agentcore_endpoint_name")
+        if runtime_id and endpoint_name:
+            task = progress.add_task("Deleting AgentCore endpoint...", total=None)
+            try:
+                agentcore.delete_agent_runtime_endpoint(sess, runtime_id, endpoint_name)
+                progress.update(task, description="[green]AgentCore endpoint deleted")
+            except Exception as e:
+                progress.update(task, description=f"[yellow]AgentCore endpoint: {e}")
+            progress.remove_task(task)
+
+        # 6. AgentCore Runtime
         if runtime_id:
             task = progress.add_task("Deleting AgentCore runtime...", total=None)
             try:
@@ -101,7 +127,7 @@ def run_destroy(
                 progress.update(task, description=f"[yellow]AgentCore runtime: {e}")
             progress.remove_task(task)
 
-        # 5. S3 Bucket
+        # 7. S3 Bucket
         bucket_name = resources.get("s3_bucket")
         if bucket_name:
             task = progress.add_task("Emptying and deleting S3 bucket...", total=None)
@@ -112,15 +138,15 @@ def run_destroy(
                 progress.update(task, description=f"[yellow]S3 bucket: {e}")
             progress.remove_task(task)
 
-        # 6. IAM Role
+        # 8. AgentCore IAM Role
         role_name = resources.get("iam_role_name")
         if role_name:
-            task = progress.add_task("Deleting IAM role...", total=None)
+            task = progress.add_task("Deleting AgentCore IAM role...", total=None)
             try:
                 agentcore.delete_iam_role(sess, role_name)
-                progress.update(task, description="[green]IAM role deleted")
+                progress.update(task, description="[green]AgentCore IAM role deleted")
             except Exception as e:
-                progress.update(task, description=f"[yellow]IAM role: {e}")
+                progress.update(task, description=f"[yellow]AgentCore IAM role: {e}")
             progress.remove_task(task)
 
     # Remove state file

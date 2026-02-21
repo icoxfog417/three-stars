@@ -1,7 +1,6 @@
 """Amazon Bedrock AgentCore runtime management.
 
-Patterns adapted from bedrock-agentcore-starter-toolkit.
-Uses direct boto3 calls for AgentCore runtime lifecycle.
+Uses bedrock-agentcore-control (CRUD) and bedrock-agentcore (invocation).
 """
 
 from __future__ import annotations
@@ -46,14 +45,14 @@ def upload_agent_package(
     bucket_name: str,
     agent_zip: bytes,
     key: str = "agent.zip",
-) -> str:
+) -> tuple[str, str]:
     """Upload agent zip package to S3 staging bucket.
 
-    Returns the S3 URI (s3://bucket/key).
+    Returns (bucket_name, key) tuple.
     """
     s3 = session.client("s3")
     s3.put_object(Bucket=bucket_name, Key=key, Body=agent_zip)
-    return f"s3://{bucket_name}/{key}"
+    return bucket_name, key
 
 
 def create_iam_role(
@@ -91,7 +90,7 @@ def create_iam_role(
             return resp["Role"]["Arn"]
         raise
 
-    # Attach policy for Bedrock model invocation
+    # Attach policy for Bedrock model invocation and S3 code access
     inline_policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -108,7 +107,7 @@ def create_iam_role(
                 "Action": [
                     "s3:GetObject",
                 ],
-                "Resource": "arn:aws:s3:::three-stars-*/*",
+                "Resource": "arn:aws:s3:::sss-*/*",
             },
         ],
     }
@@ -128,93 +127,190 @@ def create_iam_role(
 def create_agent_runtime(
     session: boto3.Session,
     name: str,
-    agent_s3_uri: str,
-    model_id: str,
+    s3_bucket: str,
+    s3_key: str,
     role_arn: str,
     description: str = "",
-    memory_mb: int = 512,
+    entry_point: list[str] | None = None,
+    runtime: str = "PYTHON_3_11",
+    environment_variables: dict[str, str] | None = None,
 ) -> dict:
     """Create a Bedrock AgentCore runtime.
 
     Args:
         session: boto3 session.
         name: Runtime name.
-        agent_s3_uri: S3 URI of the agent zip package.
-        model_id: Bedrock model ID.
+        s3_bucket: S3 bucket containing agent code.
+        s3_key: S3 key of the agent zip package.
         role_arn: IAM execution role ARN.
         description: Runtime description.
-        memory_mb: Memory allocation in MB.
+        entry_point: Entry point command list.
+        runtime: Python runtime version (PYTHON_3_11, PYTHON_3_12, etc).
+        environment_variables: Environment variables for the runtime.
 
     Returns:
-        Dict with 'runtime_id' and 'endpoint'.
+        Dict with 'runtime_id' and 'runtime_arn'.
     """
-    client = session.client("bedrock-agentcore")
+    client = session.client("bedrock-agentcore-control")
 
-    resp = client.create_agent_runtime(
-        agentRuntimeName=name,
-        description=description or f"three-stars runtime: {name}",
-        agentRuntimeArtifact={
-            "s3": {"s3BucketUri": agent_s3_uri},
+    if entry_point is None:
+        entry_point = ["agent.py"]
+
+    kwargs = {
+        "agentRuntimeName": name,
+        "description": description or f"three-stars runtime: {name}",
+        "agentRuntimeArtifact": {
+            "codeConfiguration": {
+                "code": {
+                    "s3": {
+                        "bucket": s3_bucket,
+                        "prefix": s3_key,
+                    },
+                },
+                "runtime": runtime,
+                "entryPoint": entry_point,
+            },
         },
-        roleArn=role_arn,
-        networkConfiguration={"networkMode": "PUBLIC"},
-    )
+        "roleArn": role_arn,
+        "networkConfiguration": {"networkMode": "PUBLIC"},
+    }
+
+    if environment_variables:
+        kwargs["environmentVariables"] = environment_variables
+
+    resp = client.create_agent_runtime(**kwargs)
 
     runtime_id = resp["agentRuntimeId"]
-    endpoint = resp.get("agentRuntimeEndpoint", "")
+    runtime_arn = resp["agentRuntimeArn"]
 
-    # Wait for runtime to become active
-    _wait_for_runtime_active(client, runtime_id)
-
-    # Get endpoint after activation
-    status_resp = client.get_agent_runtime(agentRuntimeId=runtime_id)
-    endpoint = status_resp.get("agentRuntimeEndpoint", endpoint)
+    # Wait for runtime to become ready
+    _wait_for_runtime_ready(client, runtime_id)
 
     return {
         "runtime_id": runtime_id,
-        "endpoint": endpoint,
+        "runtime_arn": runtime_arn,
     }
 
 
-def _wait_for_runtime_active(
+def create_agent_runtime_endpoint(
+    session: boto3.Session,
+    runtime_id: str,
+    endpoint_name: str,
+) -> dict:
+    """Create an endpoint for an AgentCore runtime.
+
+    Args:
+        session: boto3 session.
+        runtime_id: The agent runtime ID.
+        endpoint_name: Name for the endpoint.
+
+    Returns:
+        Dict with 'endpoint_name', 'endpoint_arn'.
+    """
+    client = session.client("bedrock-agentcore-control")
+
+    resp = client.create_agent_runtime_endpoint(
+        agentRuntimeId=runtime_id,
+        name=endpoint_name,
+    )
+
+    endpoint_arn = resp["agentRuntimeEndpointArn"]
+
+    # Wait for endpoint to become ready
+    _wait_for_endpoint_ready(client, runtime_id, endpoint_name)
+
+    return {
+        "endpoint_name": endpoint_name,
+        "endpoint_arn": endpoint_arn,
+    }
+
+
+def _wait_for_runtime_ready(
     client,
     runtime_id: str,
     max_wait_seconds: int = 300,
     poll_interval: int = 10,
 ) -> None:
-    """Poll until runtime reaches ACTIVE status."""
+    """Poll until runtime reaches READY status."""
     start = time.time()
     while time.time() - start < max_wait_seconds:
         resp = client.get_agent_runtime(agentRuntimeId=runtime_id)
         status = resp.get("status", "")
-        if status == "ACTIVE":
+        if status == "READY":
             return
-        if status in ("FAILED", "DELETE_FAILED"):
+        if status in ("CREATE_FAILED", "UPDATE_FAILED"):
             raise RuntimeError(
                 f"AgentCore runtime {runtime_id} entered {status} state: "
-                f"{resp.get('statusReason', 'unknown reason')}"
+                f"{resp.get('failureReason', 'unknown reason')}"
             )
         time.sleep(poll_interval)
 
     raise TimeoutError(
-        f"AgentCore runtime {runtime_id} did not reach ACTIVE status within {max_wait_seconds}s"
+        f"AgentCore runtime {runtime_id} did not reach READY status within {max_wait_seconds}s"
+    )
+
+
+def _wait_for_endpoint_ready(
+    client,
+    runtime_id: str,
+    endpoint_name: str,
+    max_wait_seconds: int = 300,
+    poll_interval: int = 10,
+) -> None:
+    """Poll until endpoint reaches READY status."""
+    start = time.time()
+    while time.time() - start < max_wait_seconds:
+        resp = client.get_agent_runtime_endpoint(
+            agentRuntimeId=runtime_id,
+            endpointName=endpoint_name,
+        )
+        status = resp.get("status", "")
+        if status == "READY":
+            return
+        if status in ("CREATE_FAILED", "UPDATE_FAILED"):
+            raise RuntimeError(
+                f"AgentCore endpoint {endpoint_name} entered {status} state: "
+                f"{resp.get('failureReason', 'unknown reason')}"
+            )
+        time.sleep(poll_interval)
+
+    raise TimeoutError(
+        f"AgentCore endpoint {endpoint_name} did not reach READY within {max_wait_seconds}s"
     )
 
 
 def get_agent_runtime_status(session: boto3.Session, runtime_id: str) -> dict:
     """Get the current status of an AgentCore runtime."""
-    client = session.client("bedrock-agentcore")
+    client = session.client("bedrock-agentcore-control")
     resp = client.get_agent_runtime(agentRuntimeId=runtime_id)
     return {
         "runtime_id": runtime_id,
         "status": resp.get("status", "UNKNOWN"),
-        "endpoint": resp.get("agentRuntimeEndpoint", ""),
+        "runtime_arn": resp.get("agentRuntimeArn", ""),
     }
+
+
+def delete_agent_runtime_endpoint(
+    session: boto3.Session,
+    runtime_id: str,
+    endpoint_name: str,
+) -> None:
+    """Delete an AgentCore runtime endpoint."""
+    client = session.client("bedrock-agentcore-control")
+    try:
+        client.delete_agent_runtime_endpoint(
+            agentRuntimeId=runtime_id,
+            endpointName=endpoint_name,
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ResourceNotFoundException":
+            return
+        raise
 
 
 def delete_agent_runtime(session: boto3.Session, runtime_id: str) -> None:
     """Delete an AgentCore runtime."""
-    client = session.client("bedrock-agentcore")
+    client = session.client("bedrock-agentcore-control")
     try:
         client.delete_agent_runtime(agentRuntimeId=runtime_id)
     except ClientError as e:

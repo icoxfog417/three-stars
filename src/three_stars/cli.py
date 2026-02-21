@@ -15,12 +15,12 @@ err_console = Console(stderr=True)
 
 
 @click.group()
-@click.version_option(version=__version__, prog_name="three-stars")
+@click.version_option(version=__version__, prog_name="sss")
 def main() -> None:
     """Deploy AI-powered web applications to AWS with a single command.
 
-    three-stars provisions a Bedrock AgentCore runtime, CloudFront distribution,
-    and CloudFront Function to serve your AI app at a single URL.
+    sss provisions a Bedrock AgentCore runtime, CloudFront distribution,
+    and Lambda function to serve your AI app at a single URL.
     """
 
 

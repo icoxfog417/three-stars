@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from urllib.parse import urlparse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -35,21 +36,21 @@ def create_distribution(
     bucket_name: str,
     region: str,
     oac_id: str,
-    function_arn: str | None = None,
+    lambda_function_url: str | None = None,
     index_document: str = "index.html",
     api_prefix: str = "/api",
     comment: str = "",
 ) -> dict:
-    """Create a CloudFront distribution with S3 origin.
+    """Create a CloudFront distribution with S3 origin and optional Lambda API origin.
 
     Args:
         session: boto3 session.
         bucket_name: S3 bucket name (origin).
         region: S3 bucket region.
         oac_id: Origin Access Control ID.
-        function_arn: CloudFront Function ARN for viewer-request (optional).
+        lambda_function_url: Lambda function URL for API bridge (optional).
         index_document: Default root object.
-        api_prefix: API path prefix (for function association).
+        api_prefix: API path prefix for Lambda routing.
         comment: Distribution comment.
 
     Returns:
@@ -57,15 +58,80 @@ def create_distribution(
     """
     cf = session.client("cloudfront")
     caller_reference = str(uuid.uuid4())
-    origin_id = f"S3-{bucket_name}"
+    s3_origin_id = f"S3-{bucket_name}"
     s3_domain = f"{bucket_name}.s3.{region}.amazonaws.com"
 
-    # Default cache behavior
+    origins = [
+        {
+            "Id": s3_origin_id,
+            "DomainName": s3_domain,
+            "OriginAccessControlId": oac_id,
+            "S3OriginConfig": {"OriginAccessIdentity": ""},
+        }
+    ]
+
+    cache_behaviors = []
+
+    # Add Lambda function URL as second origin for API routing
+    if lambda_function_url:
+        parsed = urlparse(lambda_function_url)
+        lambda_domain = parsed.hostname
+        lambda_origin_id = "Lambda-API-Bridge"
+
+        origins.append(
+            {
+                "Id": lambda_origin_id,
+                "DomainName": lambda_domain,
+                "CustomOriginConfig": {
+                    "HTTPPort": 80,
+                    "HTTPSPort": 443,
+                    "OriginProtocolPolicy": "https-only",
+                    "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+                },
+            }
+        )
+
+        # Add cache behavior for /api/* that routes to Lambda
+        api_pattern = f"{api_prefix}/*" if not api_prefix.endswith("/*") else api_prefix
+        cache_behaviors.append(
+            {
+                "PathPattern": api_pattern,
+                "TargetOriginId": lambda_origin_id,
+                "ViewerProtocolPolicy": "https-only",
+                "AllowedMethods": {
+                    "Quantity": 7,
+                    "Items": [
+                        "GET",
+                        "HEAD",
+                        "OPTIONS",
+                        "PUT",
+                        "POST",
+                        "PATCH",
+                        "DELETE",
+                    ],
+                    "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+                },
+                "Compress": True,
+                "ForwardedValues": {
+                    "QueryString": True,
+                    "Cookies": {"Forward": "all"},
+                    "Headers": {"Quantity": 1, "Items": ["*"]},
+                },
+                "MinTTL": 0,
+                "DefaultTTL": 0,
+                "MaxTTL": 0,
+            }
+        )
+
+    # Default cache behavior (S3 frontend)
     default_cache_behavior = {
-        "TargetOriginId": origin_id,
+        "TargetOriginId": s3_origin_id,
         "ViewerProtocolPolicy": "redirect-to-https",
-        "AllowedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
-        "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+        "AllowedMethods": {
+            "Quantity": 2,
+            "Items": ["GET", "HEAD"],
+            "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+        },
         "Compress": True,
         "ForwardedValues": {
             "QueryString": False,
@@ -76,33 +142,14 @@ def create_distribution(
         "MaxTTL": 31536000,
     }
 
-    # Add CloudFront Function association if provided
-    if function_arn:
-        default_cache_behavior["FunctionAssociations"] = {
-            "Quantity": 1,
-            "Items": [
-                {
-                    "FunctionARN": function_arn,
-                    "EventType": "viewer-request",
-                }
-            ],
-        }
-
     config = {
         "CallerReference": caller_reference,
         "Comment": comment or "three-stars distribution",
         "Enabled": True,
         "DefaultRootObject": index_document,
         "Origins": {
-            "Quantity": 1,
-            "Items": [
-                {
-                    "Id": origin_id,
-                    "DomainName": s3_domain,
-                    "OriginAccessControlId": oac_id,
-                    "S3OriginConfig": {"OriginAccessIdentity": ""},
-                }
-            ],
+            "Quantity": len(origins),
+            "Items": origins,
         },
         "DefaultCacheBehavior": default_cache_behavior,
         "ViewerCertificate": {
@@ -110,6 +157,12 @@ def create_distribution(
         },
         "PriceClass": "PriceClass_100",
     }
+
+    if cache_behaviors:
+        config["CacheBehaviors"] = {
+            "Quantity": len(cache_behaviors),
+            "Items": cache_behaviors,
+        }
 
     resp = cf.create_distribution(DistributionConfig=config)
     dist = resp["Distribution"]

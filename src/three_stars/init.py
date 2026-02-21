@@ -50,7 +50,7 @@ def run_init(name: str, template: str = "starter") -> None:
     console.print(f"  cd {name}")
     console.print("  # Edit agent/agent.py with your agent logic")
     console.print("  # Edit app/index.html with your frontend")
-    console.print("  three-stars deploy")
+    console.print("  sss deploy")
 
 
 def _print_tree(directory: Path, prefix: str = "", is_last: bool = True) -> None:
