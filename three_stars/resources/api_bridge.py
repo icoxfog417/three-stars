@@ -170,6 +170,7 @@ def _create_lambda_role(
         ],
     }
 
+    created = False
     try:
         create_kwargs: dict = {
             "RoleName": role_name,
@@ -180,14 +181,15 @@ def _create_lambda_role(
             create_kwargs["Tags"] = tags
         resp = iam.create_role(**create_kwargs)
         role_arn = resp["Role"]["Arn"]
+        created = True
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
             resp = iam.get_role(RoleName=role_name)
             role_arn = resp["Role"]["Arn"]
             if tags:
                 iam.tag_role(RoleName=role_name, Tags=tags)
-            return role_arn
-        raise
+        else:
+            raise
 
     inline_policy = {
         "Version": "2012-10-17",
@@ -215,7 +217,8 @@ def _create_lambda_role(
         PolicyDocument=json.dumps(inline_policy),
     )
 
-    time.sleep(10)
+    if created:
+        time.sleep(10)
     return role_arn
 
 
@@ -261,6 +264,12 @@ def _create_lambda_function(
             raise
 
     _wait_for_lambda_active(lam, function_name)
+
+    lam.put_function_concurrency(
+        FunctionName=function_name,
+        ReservedConcurrentExecutions=10,
+    )
+
     function_url = _ensure_function_url(lam, function_name)
 
     return {

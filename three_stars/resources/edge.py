@@ -112,6 +112,7 @@ def _create_edge_role(
         ],
     }
 
+    created = False
     try:
         create_kwargs: dict = {
             "RoleName": role_name,
@@ -122,14 +123,15 @@ def _create_edge_role(
             create_kwargs["Tags"] = tags
         resp = iam.create_role(**create_kwargs)
         role_arn = resp["Role"]["Arn"]
+        created = True
     except ClientError as e:
         if e.response["Error"]["Code"] == "EntityAlreadyExists":
             resp = iam.get_role(RoleName=role_name)
             role_arn = resp["Role"]["Arn"]
             if tags:
                 iam.tag_role(RoleName=role_name, Tags=tags)
-            return role_arn
-        raise
+        else:
+            raise
 
     iam.put_role_policy(
         RoleName=role_name,
@@ -152,7 +154,8 @@ def _create_edge_role(
         ),
     )
 
-    time.sleep(10)
+    if created:
+        time.sleep(10)
     return role_arn
 
 

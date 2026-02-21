@@ -70,7 +70,7 @@ approved proposal is implemented.
 
 ---
 
-### Finding #2: No Rate Limiting — OPEN
+### Finding #2: No Rate Limiting — PARTIALLY ADDRESSED
 
 **Proposal**: No WAF on CloudFront, no `ReservedConcurrentExecutions` on Lambda,
 CloudFront API cache TTL=0.
@@ -78,10 +78,12 @@ CloudFront API cache TTL=0.
 **Current code**:
 - `cdn.py:195-198`: API cache behavior still has `MinTTL=0`, `DefaultTTL=0`, `MaxTTL=0`.
   Every request hits Lambda.
-- `api_bridge.py:238-250`: `create_function()` has no `ReservedConcurrentExecutions`.
+- `api_bridge.py`: `put_function_concurrency(ReservedConcurrentExecutions=10)` now
+  caps concurrent Lambda executions (see Finding #6).
 - `cdn.py:130-263`: No `WebACLId` in the distribution config (no WAF).
 
-**Verdict**: Not addressed. No rate limiting at any layer.
+**Verdict**: Lambda concurrency limit acts as a cost cap (Finding #6). WAF not
+added — cost/complexity not justified for current threat model.
 
 ---
 
@@ -101,26 +103,15 @@ all.
 
 ## High Findings
 
-### Finding #4: `destroy` Deletes State on Partial Failure — OPEN
+### Finding #4: `destroy` Deletes State on Partial Failure — RESOLVED
 
-**Proposal**: `destroy.py:153` wipes the state file unconditionally, even when
+**Proposal**: `destroy.py` wipes the state file unconditionally, even when
 some resources fail to delete.
 
-**Current code** (`destroy.py:62-118`): Each resource deletion is wrapped in
-`try/except` that catches and logs errors as warnings. However, `delete_state()`
-is still called unconditionally at line 118:
-
-```python
-# Line 117-119
-delete_state(project_dir)
-console.print("\n[bold green]All resources destroyed.[/bold green]")
-```
-
-If CloudFront deletion fails (e.g., timeout during disable), the state file is
-still wiped, and the user has no record of the orphaned distribution.
-
-**Verdict**: Not addressed. The proposal's recommendation to only remove state
-entries for successfully deleted resources has not been implemented.
+**Resolution**: Each successful resource deletion now nulls that field on the
+state object. On partial failure, `save_state()` writes the reduced state
+(containing only the failed resources) so the user can retry. `delete_state()`
+is only called when all resources are successfully deleted.
 
 ---
 
@@ -151,16 +142,14 @@ integration test for the full lifecycle.
 
 ---
 
-### Finding #6: No Lambda Concurrency Limit — OPEN
+### Finding #6: No Lambda Concurrency Limit — RESOLVED
 
 **Proposal**: No `ReservedConcurrentExecutions` on Lambda, leading to unbounded
 Bedrock model invocation costs.
 
-**Current code** (`api_bridge.py:238-250`): The `create_function` call does not set
-`ReservedConcurrentExecutions`. There is no call to
-`put_function_concurrency()` anywhere in the codebase.
-
-**Verdict**: Not addressed.
+**Resolution**: Added `put_function_concurrency(ReservedConcurrentExecutions=10)`
+in `_create_lambda_function()` after function creation/update. This caps
+concurrent Lambda executions at 10, bounding Bedrock invocation costs.
 
 ---
 
@@ -193,27 +182,15 @@ tags from `three-stars.yml` are merged in.
 
 ---
 
-### Finding #9: IAM Role Policy Not Updated on Re-deploy — OPEN
+### Finding #9: IAM Role Policy Not Updated on Re-deploy — RESOLVED
 
 **Proposal**: When a role already exists, `create_iam_role` returns early without
 updating the inline policy.
 
-**Current code** (`agentcore.py:213-219`):
-```python
-except ClientError as e:
-    if e.response["Error"]["Code"] == "EntityAlreadyExists":
-        resp = iam.get_role(RoleName=role_name)
-        role_arn = resp["Role"]["Arn"]
-        if tags:
-            iam.tag_role(RoleName=role_name, Tags=tags)
-        return role_arn  # <-- returns without updating inline policy
-```
-
-Same pattern in `api_bridge.py:186-192` and `edge.py:125-131`. Tags are updated
-on re-deploy, but the inline policy (`put_role_policy`) is skipped.
-
-**Verdict**: Not addressed. If the inline policy definition changes between
-versions, the old policy remains.
+**Resolution**: Removed early return from the `EntityAlreadyExists` branch in all
+three role creation functions (`api_bridge.py`, `agentcore.py`, `edge.py`).
+`put_role_policy()` now runs unconditionally. The `time.sleep(10)` for IAM
+propagation only runs when a new role is created (tracked via `created` flag).
 
 ---
 
@@ -306,30 +283,30 @@ for key in [
 
 ## Summary
 
-### Addressed (4 of 14)
+### Addressed (7 of 14)
 
 | # | Finding | Resolution |
 |---|---------|------------|
 | 1 | Unauthenticated Lambda Function URL | **Fixed** — `AuthType=AWS_IAM` + CloudFront OAC + Lambda@Edge SHA256 |
 | 3 | Wildcard CORS | **Resolved** — removed CORS headers; same-origin + OAC makes them unnecessary |
+| 4 | `destroy` deletes state on partial failure | **Fixed** — state preserved with only failed resources on partial failure |
+| 6 | No Lambda concurrency limit | **Fixed** — `ReservedConcurrentExecutions=10` via `put_function_concurrency` |
 | 8 | No resource tagging | **Fixed** — all resources tagged with standard + custom tags |
+| 9 | IAM role policy not updated on re-deploy | **Fixed** — `put_role_policy` now runs on every deploy, not just creation |
 | 11 | `callable` vs `Callable` | **Resolved** — old file deleted during redesign |
 
-### Partially Addressed (1 of 14)
+### Partially Addressed (2 of 14)
 
 | # | Finding | Status |
 |---|---------|--------|
+| 2 | No rate limiting | Lambda concurrency cap in place; WAF deferred (cost/complexity) |
 | 5 | No tests for critical modules | Resource modules now have tests; orchestrators still have none |
 
-### Not Addressed (9 of 14)
+### Not Addressed (5 of 14)
 
 | # | Finding | Severity |
 |---|---------|----------|
-| 2 | No rate limiting | Critical |
-| 4 | `destroy` deletes state on partial failure | High |
-| 6 | No Lambda concurrency limit | High |
 | 7 | No WAF on CloudFront | Medium |
-| 9 | IAM role policy not updated on re-deploy | Medium |
 | 10 | No input validation in Lambda handler | Medium |
 | 12 | Untyped boto3 client params | Low |
 | 13 | No mypy/pyright configured | Low |

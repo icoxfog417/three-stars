@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from three_stars.resources import _base, agentcore, api_bridge, cdn, edge, storage
-from three_stars.state import delete_state, load_state
+from three_stars.state import delete_state, load_state, save_state
 
 console = Console()
 err_console = Console(stderr=True)
@@ -54,6 +54,8 @@ def run_destroy(
 
     sess = _base.create_session(region=region, profile=profile)
 
+    errors: list[str] = []
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -69,8 +71,10 @@ def run_destroy(
             )
             try:
                 cdn.destroy(sess, state.cdn)
+                state.cdn = None
                 progress.update(task, description="[green]CloudFront + OACs deleted")
             except Exception as e:
+                errors.append(f"CloudFront: {e}")
                 progress.update(task, description=f"[yellow]CloudFront: {e}")
             progress.remove_task(task)
 
@@ -79,8 +83,10 @@ def run_destroy(
             task = progress.add_task("Deleting Lambda@Edge function...", total=None)
             try:
                 edge.destroy(sess, state.edge)
+                state.edge = None
                 progress.update(task, description="[green]Lambda@Edge deleted")
             except Exception as e:
+                errors.append(f"Lambda@Edge: {e}")
                 progress.update(task, description=f"[yellow]Lambda@Edge: {e} (replicas removing)")
             progress.remove_task(task)
 
@@ -89,8 +95,10 @@ def run_destroy(
             task = progress.add_task("Deleting Lambda bridge...", total=None)
             try:
                 api_bridge.destroy(sess, state.api_bridge)
+                state.api_bridge = None
                 progress.update(task, description="[green]Lambda bridge deleted")
             except Exception as e:
+                errors.append(f"Lambda bridge: {e}")
                 progress.update(task, description=f"[yellow]Lambda bridge: {e}")
             progress.remove_task(task)
 
@@ -99,8 +107,10 @@ def run_destroy(
             task = progress.add_task("Deleting AgentCore resources...", total=None)
             try:
                 agentcore.destroy(sess, state.agentcore)
+                state.agentcore = None
                 progress.update(task, description="[green]AgentCore resources deleted")
             except Exception as e:
+                errors.append(f"AgentCore: {e}")
                 progress.update(task, description=f"[yellow]AgentCore: {e}")
             progress.remove_task(task)
 
@@ -109,11 +119,20 @@ def run_destroy(
             task = progress.add_task("Emptying and deleting S3 bucket...", total=None)
             try:
                 storage.destroy(sess, state.storage)
+                state.storage = None
                 progress.update(task, description="[green]S3 bucket deleted")
             except Exception as e:
+                errors.append(f"S3 bucket: {e}")
                 progress.update(task, description=f"[yellow]S3 bucket: {e}")
             progress.remove_task(task)
 
-    # Remove state file
-    delete_state(project_dir)
-    console.print("\n[bold green]All resources destroyed.[/bold green]")
+    if errors:
+        save_state(project_dir, state)
+        console.print(
+            f"\n[bold yellow]{len(errors)} resource(s) failed to delete.[/bold yellow]"
+            " State file preserved with remaining resources."
+            " Run [cyan]destroy[/cyan] again to retry."
+        )
+    else:
+        delete_state(project_dir)
+        console.print("\n[bold green]All resources destroyed.[/bold green]")
