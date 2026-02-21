@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Deploy AI-powered web applications to AWS with a single command"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [
     { name = "icoxfog417" },
 ]
@@ -19,22 +19,21 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Build Tools",
 ]
 dependencies = [
-    "click>=8.1",
-    "rich>=13.0",
     "boto3>=1.35",
+    "click>=8.1",
     "pyyaml>=6.0",
+    "rich>=13.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
+    "moto[cloudfront,iam,lambda,s3,sts]>=5.0",
     "pytest>=8.0",
-    "moto[s3,cloudfront,iam,sts,lambda]>=5.0",
     "ruff>=0.9",
 ]
 
@@ -50,7 +49,7 @@ Issues = "https://github.com/icoxfog417/three-stars/issues"
 packages = ["three_stars"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 src = [".", "tests"]
 
