@@ -9,7 +9,7 @@ from rich.console import Console
 
 console = Console()
 
-TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
+TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
 
 def run_init(name: str, template: str = "starter") -> None:

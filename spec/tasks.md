@@ -112,20 +112,33 @@
 
 ### Tasks
 
-- ⬜ T26: Rewrite `state.py` — Define typed state dataclasses (`DeploymentState`, `AgentCoreState`, `StorageState`, `ApiBridgeState`, `EdgeState`, `CdnState`). Update `load_state()`/`save_state()` for dataclass serialization via `dataclasses.asdict()`.
-- ⬜ T27: Create `naming.py` — Extract resource name computation from `deploy.py` into `ResourceNames` frozen dataclass with `compute_names()` function.
-- ⬜ T28: Create `resources/` package — `__init__.py` with `ResourceStatus` namedtuple; `_base.py` with shared helpers (session creation re-export, progress utils).
-- ⬜ T29: Create `resources/agentcore.py` — Move IAM role + runtime + endpoint logic from `aws/agentcore.py`. Expose `deploy() -> AgentCoreState`, `destroy(AgentCoreState)`, `get_status(AgentCoreState)`.
-- ⬜ T30: Create `resources/storage.py` — Move S3 bucket + upload logic from `aws/s3.py`. Expose `deploy() -> StorageState`, `destroy(StorageState)`, `get_status(StorageState)`.
-- ⬜ T31: Create `resources/api_bridge.py` — Move Lambda bridge logic from `aws/lambda_bridge.py` (non-edge). Expose `deploy(*, agent_runtime_arn: str) -> ApiBridgeState`, `destroy(ApiBridgeState)`, `get_status(ApiBridgeState)`.
-- ⬜ T32: Create `resources/edge.py` — Move Lambda@Edge logic from `aws/lambda_bridge.py`. Expose `deploy() -> EdgeState`, `destroy(EdgeState)`, `get_status(EdgeState)`.
-- ⬜ T33: Create `resources/cdn.py` — Move CloudFront logic from `aws/cloudfront.py`. Expose `deploy(*, bucket_name, lambda_function_url, lambda_function_name, edge_function_arn) -> CdnState`, `destroy(CdnState)`, `get_status(CdnState)`.
-- ⬜ T34: Rewrite `deploy.py` — Step-by-step orchestration using typed state assignment (`state.agentcore = agentcore.deploy(...)`) with cross-resource data threading via typed attribute access.
-- ⬜ T35: Rewrite `destroy.py` — Reverse-order teardown, each module receives its own typed state. `None` check for partially-deployed stacks.
-- ⬜ T36: Rewrite `status.py` — Each module's `get_status()` receives its own typed state.
-- ⬜ T37: Migrate tests from `tests/aws/` to `tests/resources/`. Update imports and state assertions to use typed dataclasses.
-- ⬜ T38: Delete `aws/` directory (including unused `cf_function.py`).
-- ⬜ T39: Run full test suite and linter — verify zero regressions, `ruff check` and `ruff format` pass.
+- ✅ T26: Rewrite `state.py` — Define typed state dataclasses (`DeploymentState`, `AgentCoreState`, `StorageState`, `ApiBridgeState`, `EdgeState`, `CdnState`). Update `load_state()`/`save_state()` for dataclass serialization via `dataclasses.asdict()`.
+- ✅ T27: Create `naming.py` — Extract resource name computation from `deploy.py` into `ResourceNames` frozen dataclass with `compute_names()` function.
+- ✅ T28: Create `resources/` package — `__init__.py` with `ResourceStatus` namedtuple; `_base.py` with shared helpers (session creation re-export, progress utils).
+- ✅ T29: Create `resources/agentcore.py` — Move IAM role + runtime + endpoint logic from `aws/agentcore.py`. Expose `deploy() -> AgentCoreState`, `destroy(AgentCoreState)`, `get_status(AgentCoreState)`.
+- ✅ T30: Create `resources/storage.py` — Move S3 bucket + upload logic from `aws/s3.py`. Expose `deploy() -> StorageState`, `destroy(StorageState)`, `get_status(StorageState)`.
+- ✅ T31: Create `resources/api_bridge.py` — Move Lambda bridge logic from `aws/lambda_bridge.py` (non-edge). Expose `deploy(*, agent_runtime_arn: str) -> ApiBridgeState`, `destroy(ApiBridgeState)`, `get_status(ApiBridgeState)`.
+- ✅ T32: Create `resources/edge.py` — Move Lambda@Edge logic from `aws/lambda_bridge.py`. Expose `deploy() -> EdgeState`, `destroy(EdgeState)`, `get_status(EdgeState)`.
+- ✅ T33: Create `resources/cdn.py` — Move CloudFront logic from `aws/cloudfront.py`. Expose `deploy(*, bucket_name, lambda_function_url, lambda_function_name, edge_function_arn) -> CdnState`, `destroy(CdnState)`, `get_status(CdnState)`.
+- ✅ T34: Rewrite `deploy.py` — Step-by-step orchestration using typed state assignment (`state.agentcore = agentcore.deploy(...)`) with cross-resource data threading via typed attribute access.
+- ✅ T35: Rewrite `destroy.py` — Reverse-order teardown, each module receives its own typed state. `None` check for partially-deployed stacks.
+- ✅ T36: Rewrite `status.py` — Each module's `get_status()` receives its own typed state.
+- ✅ T37: Migrate tests from `tests/aws/` to `tests/resources/`. Update imports and state assertions to use typed dataclasses.
+- ✅ T38: Delete `aws/` directory (including unused `cf_function.py`).
+- ✅ T39: Run full test suite and linter — verify zero regressions, `ruff check` and `ruff format` pass.
+
+## Sprint 5.5: Remove `src/` Directory Nesting
+
+**Goal**: Flatten package layout by removing the `src/` wrapper directory
+**Deliverable**: `three_stars/` package lives at project root instead of `src/three_stars/`
+**Proposal**: `spec/proposals/20260221_dx_review_module_redesign.md` (DX improvements — approved)
+
+### Tasks
+
+- ✅ T50: Move `src/three_stars/` to `three_stars/` at project root — remove `src/` directory
+- ✅ T51: Update `pyproject.toml` — change `[tool.hatch.build.targets.wheel]` packages, `[tool.ruff]` src, and `[tool.pytest.ini_options]` pythonpath for flat layout
+- ✅ T52: Update all spec files and proposals to reference `three_stars/` instead of `src/three_stars/`
+- ✅ T53: Verify `pip install -e .`, tests, and linter work with flat layout
 
 ## Backlog
 
@@ -144,25 +157,24 @@ Items not yet scheduled:
 ```
 three-stars/
 ├── pyproject.toml
-├── src/
-│   └── three_stars/
+├── three_stars/              # Package at project root (flat layout)
+│   ├── __init__.py
+│   ├── cli.py
+│   ├── config.py
+│   ├── state.py             # Typed DeploymentState + per-resource state dataclasses
+│   ├── naming.py            # ResourceNames frozen dataclass
+│   ├── deploy.py            # Orchestrator with typed state
+│   ├── destroy.py           # Reverse-order with typed per-module state
+│   ├── status.py            # Status with typed per-module state
+│   ├── init.py
+│   └── resources/           # Resource modules (replaces aws/)
 │       ├── __init__.py
-│       ├── cli.py
-│       ├── config.py
-│       ├── state.py           # Typed DeploymentState + per-resource state dataclasses
-│       ├── naming.py          # ResourceNames frozen dataclass
-│       ├── deploy.py          # Orchestrator with typed state
-│       ├── destroy.py         # Reverse-order with typed per-module state
-│       ├── status.py          # Status with typed per-module state
-│       ├── init.py
-│       └── resources/         # Resource modules (replaces aws/)
-│           ├── __init__.py
-│           ├── _base.py
-│           ├── agentcore.py
-│           ├── storage.py
-│           ├── api_bridge.py
-│           ├── edge.py
-│           └── cdn.py
+│       ├── _base.py
+│       ├── agentcore.py
+│       ├── storage.py
+│       ├── api_bridge.py
+│       ├── edge.py
+│       └── cdn.py
 ├── tests/
 │   ├── conftest.py
 │   ├── test_cli.py

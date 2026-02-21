@@ -1,4 +1,4 @@
-"""CloudFront distribution management."""
+"""CDN resource module — CloudFront distribution + OACs + bucket policy."""
 
 from __future__ import annotations
 
@@ -9,21 +9,111 @@ from urllib.parse import urlparse
 import boto3
 from botocore.exceptions import ClientError
 
+from three_stars.config import ProjectConfig
+from three_stars.naming import ResourceNames
+from three_stars.resources import ResourceStatus
+from three_stars.state import CdnState
 
-def create_origin_access_control(
+
+def deploy(
+    session: boto3.Session,
+    config: ProjectConfig,
+    names: ResourceNames,
+    *,
+    bucket_name: str,
+    lambda_function_url: str,
+    lambda_function_name: str,
+    edge_function_arn: str,
+    tags: dict[str, str] | None = None,
+    existing: CdnState | None = None,
+) -> CdnState:
+    """Create CloudFront distribution + OACs.
+
+    Args:
+        bucket_name: S3 bucket for default origin.
+        lambda_function_url: Lambda function URL for API origin.
+        lambda_function_name: Lambda function name (for granting CloudFront access).
+        edge_function_arn: Versioned Lambda@Edge ARN.
+        tags: Dict format tags for CloudFront.
+        existing: Existing state if updating (skips creation).
+    """
+    if existing:
+        return existing
+
+    prefix = names.prefix
+
+    # Create OACs
+    oac_id = _create_origin_access_control(session, f"{prefix}-oac")
+    lambda_oac_id = _create_origin_access_control(
+        session, f"{prefix}-lambda-oac", origin_type="lambda"
+    )
+
+    # Create distribution
+    dist_info = _create_distribution(
+        session,
+        bucket_name=bucket_name,
+        region=config.region,
+        oac_id=oac_id,
+        lambda_function_url=lambda_function_url,
+        lambda_oac_id=lambda_oac_id,
+        edge_function_arn=edge_function_arn,
+        index_document=config.app.index,
+        api_prefix=config.api.prefix,
+        comment=f"three-stars: {config.name}",
+        tags=tags,
+    )
+
+    # Set S3 bucket policy for CloudFront access
+    from three_stars.resources.storage import set_bucket_policy_for_cloudfront
+
+    set_bucket_policy_for_cloudfront(session, bucket_name, dist_info["arn"])
+
+    # Grant CloudFront OAC permission to invoke Lambda
+    from three_stars.resources.api_bridge import grant_cloudfront_access
+
+    grant_cloudfront_access(session, lambda_function_name, dist_info["arn"])
+
+    return CdnState(
+        distribution_id=dist_info["distribution_id"],
+        domain=dist_info["domain_name"],
+        arn=dist_info["arn"],
+        oac_id=oac_id,
+        lambda_oac_id=lambda_oac_id,
+    )
+
+
+def destroy(session: boto3.Session, state: CdnState) -> None:
+    """Delete CloudFront distribution and OACs."""
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        _delete_distribution(session, state.distribution_id)
+
+    for oac_id in [state.oac_id, state.lambda_oac_id]:
+        with contextlib.suppress(Exception):
+            _delete_origin_access_control(session, oac_id)
+
+
+def get_status(session: boto3.Session, state: CdnState) -> list[ResourceStatus]:
+    """Return CloudFront distribution status."""
+    dist_id = state.distribution_id
+    try:
+        result = _get_distribution(session, dist_id)
+        status = result["status"]
+        if status == "Deployed":
+            return [ResourceStatus("CloudFront", dist_id, "[green]Deployed[/green]")]
+        else:
+            return [ResourceStatus("CloudFront", dist_id, f"[yellow]{status}[/yellow]")]
+    except Exception:
+        return [ResourceStatus("CloudFront", dist_id, "[red]Not Found[/red]")]
+
+
+def _create_origin_access_control(
     session: boto3.Session,
     name: str,
     origin_type: str = "s3",
 ) -> str:
-    """Create an Origin Access Control.
-
-    Args:
-        session: boto3 session.
-        name: OAC name.
-        origin_type: Origin type — "s3" or "lambda".
-
-    Returns the OAC ID.
-    """
+    """Create an Origin Access Control. Returns the OAC ID."""
     cf = session.client("cloudfront")
     resp = cf.create_origin_access_control(
         OriginAccessControlConfig={
@@ -37,7 +127,7 @@ def create_origin_access_control(
     return resp["OriginAccessControl"]["Id"]
 
 
-def create_distribution(
+def _create_distribution(
     session: boto3.Session,
     bucket_name: str,
     region: str,
@@ -50,23 +140,7 @@ def create_distribution(
     comment: str = "",
     tags: dict[str, str] | None = None,
 ) -> dict:
-    """Create a CloudFront distribution with S3 origin and optional Lambda API origin.
-
-    Args:
-        session: boto3 session.
-        bucket_name: S3 bucket name (origin).
-        region: S3 bucket region.
-        oac_id: Origin Access Control ID for S3.
-        lambda_function_url: Lambda function URL for API bridge (optional).
-        lambda_oac_id: OAC ID for Lambda origin (enables SigV4 signing).
-        edge_function_arn: Versioned Lambda@Edge ARN for SHA256 computation.
-        index_document: Default root object.
-        api_prefix: API path prefix for Lambda routing.
-        comment: Distribution comment.
-
-    Returns:
-        Dict with 'distribution_id', 'domain_name', 'arn'.
-    """
+    """Create a CloudFront distribution."""
     cf = session.client("cloudfront")
     caller_reference = str(uuid.uuid4())
     s3_origin_id = f"S3-{bucket_name}"
@@ -83,7 +157,6 @@ def create_distribution(
 
     cache_behaviors = []
 
-    # Add Lambda function URL as second origin for API routing
     if lambda_function_url:
         parsed = urlparse(lambda_function_url)
         lambda_domain = parsed.hostname
@@ -103,7 +176,6 @@ def create_distribution(
             lambda_origin["OriginAccessControlId"] = lambda_oac_id
         origins.append(lambda_origin)
 
-        # Add cache behavior for /api/* that routes to Lambda
         api_pattern = f"{api_prefix}/*" if not api_prefix.endswith("/*") else api_prefix
         api_cache_behavior = {
             "PathPattern": api_pattern,
@@ -111,15 +183,7 @@ def create_distribution(
             "ViewerProtocolPolicy": "https-only",
             "AllowedMethods": {
                 "Quantity": 7,
-                "Items": [
-                    "GET",
-                    "HEAD",
-                    "OPTIONS",
-                    "PUT",
-                    "POST",
-                    "PATCH",
-                    "DELETE",
-                ],
+                "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
                 "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
             },
             "Compress": True,
@@ -133,7 +197,6 @@ def create_distribution(
             "MaxTTL": 0,
         }
 
-        # Lambda@Edge computes SHA256 for OAC-signed POST/PUT requests
         if edge_function_arn:
             api_cache_behavior["LambdaFunctionAssociations"] = {
                 "Quantity": 1,
@@ -148,7 +211,6 @@ def create_distribution(
 
         cache_behaviors.append(api_cache_behavior)
 
-    # Default cache behavior (S3 frontend)
     default_cache_behavior = {
         "TargetOriginId": s3_origin_id,
         "ViewerProtocolPolicy": "redirect-to-https",
@@ -167,24 +229,19 @@ def create_distribution(
         "MaxTTL": 31536000,
     }
 
-    config = {
+    dist_config = {
         "CallerReference": caller_reference,
         "Comment": comment or "three-stars distribution",
         "Enabled": True,
         "DefaultRootObject": index_document,
-        "Origins": {
-            "Quantity": len(origins),
-            "Items": origins,
-        },
+        "Origins": {"Quantity": len(origins), "Items": origins},
         "DefaultCacheBehavior": default_cache_behavior,
-        "ViewerCertificate": {
-            "CloudFrontDefaultCertificate": True,
-        },
+        "ViewerCertificate": {"CloudFrontDefaultCertificate": True},
         "PriceClass": "PriceClass_100",
     }
 
     if cache_behaviors:
-        config["CacheBehaviors"] = {
+        dist_config["CacheBehaviors"] = {
             "Quantity": len(cache_behaviors),
             "Items": cache_behaviors,
         }
@@ -192,11 +249,11 @@ def create_distribution(
     if tags:
         tag_items = [{"Key": k, "Value": v} for k, v in tags.items()]
         resp = cf.create_distribution_with_tags(
-            DistributionConfig=config,
+            DistributionConfig=dist_config,
             Tags={"Items": tag_items},
         )
     else:
-        resp = cf.create_distribution(DistributionConfig=config)
+        resp = cf.create_distribution(DistributionConfig=dist_config)
     dist = resp["Distribution"]
 
     return {
@@ -206,7 +263,7 @@ def create_distribution(
     }
 
 
-def get_distribution(session: boto3.Session, distribution_id: str) -> dict:
+def _get_distribution(session: boto3.Session, distribution_id: str) -> dict:
     """Get distribution details."""
     cf = session.client("cloudfront")
     resp = cf.get_distribution(Id=distribution_id)
@@ -221,48 +278,26 @@ def get_distribution(session: boto3.Session, distribution_id: str) -> dict:
     }
 
 
-def disable_distribution(session: boto3.Session, distribution_id: str) -> None:
-    """Disable a CloudFront distribution (required before deletion)."""
-    cf = session.client("cloudfront")
-    resp = cf.get_distribution_config(Id=distribution_id)
-    config = resp["DistributionConfig"]
-    etag = resp["ETag"]
-
-    if not config["Enabled"]:
-        return
-
-    config["Enabled"] = False
-    cf.update_distribution(Id=distribution_id, DistributionConfig=config, IfMatch=etag)
-
-
-def wait_for_distribution_deployed(
-    session: boto3.Session,
-    distribution_id: str,
-    max_wait_seconds: int = 600,
-) -> None:
-    """Wait for distribution to reach 'Deployed' status."""
-    cf = session.client("cloudfront")
-    start = time.time()
-    while time.time() - start < max_wait_seconds:
-        resp = cf.get_distribution(Id=distribution_id)
-        status = resp["Distribution"]["Status"]
-        if status == "Deployed":
-            return
-        time.sleep(15)
-    raise TimeoutError(
-        f"Distribution {distribution_id} did not reach 'Deployed' status within {max_wait_seconds}s"
-    )
-
-
-def delete_distribution(session: boto3.Session, distribution_id: str) -> None:
+def _delete_distribution(session: boto3.Session, distribution_id: str) -> None:
     """Disable and delete a CloudFront distribution."""
     cf = session.client("cloudfront")
     try:
         # Disable first
-        disable_distribution(session, distribution_id)
+        resp = cf.get_distribution_config(Id=distribution_id)
+        config = resp["DistributionConfig"]
+        etag = resp["ETag"]
 
-        # Wait for disabled state
-        wait_for_distribution_deployed(session, distribution_id, max_wait_seconds=600)
+        if config["Enabled"]:
+            config["Enabled"] = False
+            cf.update_distribution(Id=distribution_id, DistributionConfig=config, IfMatch=etag)
+
+        # Wait for deployed
+        start = time.time()
+        while time.time() - start < 600:
+            resp = cf.get_distribution(Id=distribution_id)
+            if resp["Distribution"]["Status"] == "Deployed":
+                break
+            time.sleep(15)
 
         # Delete
         resp = cf.get_distribution(Id=distribution_id)
@@ -274,7 +309,7 @@ def delete_distribution(session: boto3.Session, distribution_id: str) -> None:
         raise
 
 
-def delete_origin_access_control(session: boto3.Session, oac_id: str) -> None:
+def _delete_origin_access_control(session: boto3.Session, oac_id: str) -> None:
     """Delete an Origin Access Control."""
     cf = session.client("cloudfront")
     try:

@@ -63,7 +63,7 @@ Reorganize into **resource modules** grouped by logical concern. Each module own
 ### New directory structure
 
 ```
-src/three_stars/
+three_stars/
 ├── cli.py              # (unchanged)
 ├── config.py           # (unchanged)
 ├── state.py            # Typed DeploymentState + per-resource state dataclasses
