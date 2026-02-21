@@ -85,24 +85,17 @@ CloudFront API cache TTL=0.
 
 ---
 
-### Finding #3: Wildcard CORS — OPEN
+### Finding #3: Wildcard CORS — RESOLVED
 
-**Proposal**: `Access-Control-Allow-Origin: *` in Lambda handler responses.
+**Proposal**: Remove CORS headers entirely from the Lambda handler.
 
-**Current code** (`api_bridge.py:51`):
-```python
-"Access-Control-Allow-Origin": "*",
-```
+The frontend and API share the same CloudFront domain, so all browser requests
+are **same-origin** — CORS headers are never evaluated. Additionally, OAC blocks
+direct Lambda invocation, so cross-origin callers cannot reach the endpoint at
+all.
 
-The embedded Lambda handler code still returns `Access-Control-Allow-Origin: *`.
-This is inside the `_BRIDGE_FUNCTION_CODE` string constant at `api_bridge.py:17-57`.
-
-Note: The OAC change (Finding #1) means the Lambda is no longer publicly
-accessible, which reduces the practical risk of the wildcard CORS. However, any
-origin that can route through CloudFront can still make cross-origin requests.
-
-**Verdict**: Not addressed. The CORS origin should be restricted to the
-CloudFront domain.
+**Resolution**: Removed all three `Access-Control-*` headers from
+`_BRIDGE_FUNCTION_CODE` in `api_bridge.py`. Only `Content-Type` remains.
 
 ---
 
