@@ -16,6 +16,8 @@ Deploy AI-powered web applications to AWS with a single command.
 pip install three-stars
 ```
 
+This installs the `sss` command (short for **s**imple **s**erverless **s**tack).
+
 ### Create a project
 
 ```bash
@@ -38,8 +40,10 @@ my-app/
 ### Test locally
 
 ```bash
-python agent/agent.py
+python agent/agent.py "What is Amazon Bedrock?"
 ```
+
+This calls your agent handler directly. Requires AWS credentials (`aws configure`) since the starter agent invokes a Bedrock model.
 
 ### Deploy
 
@@ -59,6 +63,8 @@ This provisions all AWS resources and prints your CloudFront URL:
 Deployed successfully!
 URL: https://d1234567890.cloudfront.net
 ```
+
+The five steps map to the three stars: **AI Backend** (steps 2), **Frontend CDN** (steps 1, 5), and **API Bridge** (steps 3, 4).
 
 ### Check status
 
