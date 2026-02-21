@@ -92,10 +92,14 @@ all user frontend code must include this pattern.
 
 ---
 
-## Option 2: API Gateway (HTTP API)
+## Option 2: API Gateway (REST API)
 
-Replace Lambda Function URL with API Gateway HTTP API as the backend entry point.
+Replace Lambda Function URL with API Gateway REST API as the backend entry point.
 This naturally separates frontend and backend into independent deployment units.
+
+**Why REST API, not HTTP API**: HTTP API does NOT support response streaming.
+REST API gained streaming support in November 2025 (`transferMode=STREAM`).
+For an AI agent that produces incremental text output, streaming is essential.
 
 ### Architecture
 
@@ -103,9 +107,9 @@ This naturally separates frontend and backend into independent deployment units.
                          CloudFront (frontend only)
 Browser ─→ CloudFront ─→ /* ─→ S3 (OAC)
          │
-         └─→ API Gateway (HTTP API) ─→ Lambda ─→ AgentCore
-              ↑ Built-in throttling, auth, WAF-ready
-              ↑ Own URL: https://{api-id}.execute-api.{region}.amazonaws.com
+         └─→ API Gateway (REST API) ─→ Lambda (RESPONSE_STREAM) ─→ AgentCore
+              ↑ Built-in throttling, WAF, auth
+              ↑ Own URL: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
 ```
 
 The frontend calls the API Gateway URL directly (or via CloudFront as a second origin —
@@ -136,50 +140,47 @@ without touching any backend resources.
 
 ### CORS Handling
 
-With separate domains, CORS is required. API Gateway HTTP API has built-in CORS
-configuration (no need to handle in Lambda code):
+With separate domains, CORS is required. REST API supports CORS configuration
+via method responses and gateway responses (or via Lambda proxy integration).
 
-```python
-# API Gateway handles CORS automatically via configuration
-# Remove CORS headers from Lambda handler entirely
-cors_config = {
-    "AllowOrigins": [f"https://{cloudfront_domain}"],
-    "AllowMethods": ["POST", "OPTIONS"],
-    "AllowHeaders": ["Content-Type"],
-}
-```
-
-This also **fixes the wildcard CORS issue** (finding #3 from the review) by design.
+This also **fixes the wildcard CORS issue** (finding #3 from the review) — the
+allowed origin is set to the CloudFront domain explicitly.
 
 ### Streaming Support
 
-API Gateway HTTP API supports Lambda response streaming (InvokeMode=RESPONSE_STREAM).
-This was added in late 2024 and is GA. Key constraints:
-- Maximum response payload: 20 MB (sufficient for AI agent text responses)
-- Chunked transfer encoding
-- Works with standard `fetch()` + `ReadableStream` on the client side
+REST API supports Lambda response streaming since November 2025:
+- Set `transferMode=STREAM` on the integration
+- Uses `InvokeWithResponseStream` Lambda API internally
+- First 10 MB: no bandwidth restriction; beyond: 2 MB/s limit
+- Idle timeout: 30 seconds (edge-optimized) or 5 minutes (regional)
+- Max streaming duration: 15 minutes
+- Does not support endpoint caching or content encoding while streaming
+
+**Important**: Browser `fetch()` API may buffer streamed responses in some cases.
+`EventSource` or `ReadableStream` with explicit chunked handling is recommended.
 
 ### Authentication Options
 
-API Gateway HTTP API supports:
+API Gateway REST API supports:
 - **IAM auth** — SigV4 from the client (complex for browser apps)
-- **JWT authorizer** — Validate JWTs from identity providers (future auth feature)
-- **API keys** — Simple throttling per key
-- **None + Lambda authorizer** — Custom auth logic
-- **None + WAF** — Rate limiting at the edge
+- **Cognito authorizer** — User pool-based auth
+- **API keys + usage plans** — Throttling per key
+- **Lambda authorizer** — Custom auth logic (token or request-based)
+- **WAF integration** — Rate limiting, IP blocking, geo-restriction
 
-For the initial implementation, `None` auth + Lambda concurrency limits provides
-equivalent security to the current setup, with the path to add proper auth later.
+For the initial implementation, `NONE` auth + Lambda concurrency limits provides
+equivalent security to the current setup, with a clear path to add Cognito or
+API keys later.
 
 ### Evaluation
 
 | Criterion | Rating | Notes |
 |-----------|--------|-------|
-| Security | **Good+** | Built-in throttling, WAF-ready, auth extensible |
-| Streaming | **Yes** | HTTP API supports RESPONSE_STREAM (20 MB limit) |
+| Security | **Good+** | Built-in throttling, WAF, auth extensible |
+| Streaming | **Yes** | REST API streaming since Nov 2025 (10 MB unrestricted, then 2 MB/s) |
 | Parallel deploy | **Yes** | Frontend and backend fully independent |
-| Complexity | **Medium** | New `aws/apigateway.py` module, route setup |
-| Cost | **$1/M requests** | HTTP API pricing, free tier: 1M req/month for 12 months |
+| Complexity | **Medium-High** | New `aws/apigateway.py` module, REST API has more config than HTTP API |
+| Cost | **$3.50/M requests** | REST API pricing (more expensive than HTTP API's $1/M) |
 | Client burden | **None** | Standard `fetch()` calls |
 
 ---
@@ -230,47 +231,58 @@ Browser ─→ CloudFront ─→ /api/* ─→ Lambda Function URL (AuthType=NON
 
 ## Comparison Summary
 
-| | OAC for Lambda | API Gateway | Shared Secret |
+| | OAC for Lambda | API Gateway (REST) | Shared Secret |
 |---|---|---|---|
-| **Security** | Strong (SigV4) | Good (throttling, WAF path) | Weak (obscurity) |
-| **Streaming** | Yes | Yes (20 MB limit) | Yes |
+| **Security** | Strong (SigV4) | Good (throttling, WAF) | Weak (obscurity) |
+| **Streaming** | Yes (Function URL) | Yes (since Nov 2025, 10MB+2MB/s) | Yes |
 | **Parallel deploy** | No | **Yes** | No |
 | **Client SHA256 needed** | **Yes (friction)** | No | No |
-| **Fixes wildcard CORS** | No (manual) | **Yes (built-in)** | No (manual) |
-| **Rate limiting** | Need Lambda concurrency | **Built-in** | Need Lambda concurrency |
-| **Future auth path** | Limited | **JWT, API keys, WAF** | Limited |
-| **Implementation size** | ~50 lines changed | ~200 lines new module | ~20 lines changed |
-| **Additional cost** | Free | $1/M requests | Free |
+| **Fixes wildcard CORS** | No (manual) | **Yes** | No (manual) |
+| **Rate limiting** | Need Lambda concurrency | **Built-in (usage plans)** | Need Lambda concurrency |
+| **Future auth path** | Limited | **Cognito, API keys, WAF** | Limited |
+| **Implementation size** | ~50 lines changed | ~250 lines new module | ~20 lines changed |
+| **Additional cost** | Free | $3.50/M requests | Free |
 | **Deploy speed improvement** | None | **Frontend: seconds** | None |
+| **Lambda@Edge needed** | No (native OAC) | No | No |
 
 ## Recommendation
 
-**API Gateway (Option 2)** is recommended as the primary approach because:
+**API Gateway REST API (Option 2)** is recommended as the primary approach because:
 
 1. **Parallel deployment** is a real developer-experience win — frontend iteration drops
    from minutes to seconds.
 2. **No client-side SHA256** — OAC's POST requirement adds unavoidable friction to every
    API call and every user's frontend code.
-3. **Built-in rate limiting** solves review finding #2 (no rate limiting) by default.
-4. **Built-in CORS** solves review finding #3 (wildcard CORS) by design.
-5. **Future-proof auth** — JWT authorizers, API keys, and WAF integration provide a
-   clear upgrade path.
-6. **20 MB streaming limit** is more than sufficient for text-based AI agent responses.
+3. **Built-in rate limiting** solves review finding #2 (no rate limiting) via usage plans.
+4. **CORS control** solves review finding #3 (wildcard CORS).
+5. **Future-proof auth** — Cognito authorizers, API keys, Lambda authorizers, and WAF
+   integration provide a clear upgrade path.
+6. **Streaming supported** — REST API streaming (Nov 2025) handles AI agent responses.
+   The 10 MB unrestricted + 2 MB/s throttle is sufficient for text output.
 
-The $1/M request cost is negligible for a developer tool, and the first 1M requests/month
-are free for 12 months.
+The $3.50/M request cost is higher than HTTP API but includes more features (WAF, usage
+plans, request validation). For a developer tool with modest traffic, this is acceptable.
+
+### Why not HTTP API (cheaper)?
+
+HTTP API ($1/M requests) does NOT support response streaming. Since AI agent responses
+benefit significantly from streaming (progressive text display), REST API is required
+despite the higher per-request cost.
 
 ### Implementation Plan (if approved)
 
-1. Create `src/three_stars/aws/apigateway.py` — HTTP API, route, integration, stage
-2. Update `lambda_bridge.py` — remove Function URL creation, remove `Principal=*`
+1. Create `src/three_stars/aws/apigateway.py` — REST API, resource, method, Lambda
+   proxy integration with `transferMode=STREAM`, deployment, stage
+2. Update `lambda_bridge.py` — remove Function URL creation, remove `Principal=*`,
+   configure Lambda with `InvokeMode=RESPONSE_STREAM`
 3. Update `deploy.py` — split into parallel frontend/backend pipelines
 4. Update `destroy.py` — add API Gateway teardown
 5. Update `cloudfront.py` — remove Lambda origin (CloudFront serves frontend only)
 6. Update `cli.py` — add `--frontend`/`--backend` flags to `deploy`
-7. Update Lambda handler — remove CORS headers (API Gateway handles it)
-8. Update state model — add API Gateway resource IDs
+7. Update Lambda handler — remove CORS headers, adapt to API Gateway event format
+8. Update state model — add API Gateway resource IDs (rest_api_id, stage_name, etc.)
 9. Update starter template — API URL from config instead of relative `/api/*`
+10. Add CORS configuration on API Gateway (allowed origin = CloudFront domain)
 
 ## Alternatives Considered
 
