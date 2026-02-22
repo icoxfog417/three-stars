@@ -1,7 +1,7 @@
 """Starter agent for three-stars.
 
 This agent receives messages from the frontend via the /api/invoke endpoint
-and responds using a Strands Agent powered by Amazon Bedrock.
+and responds using Amazon Bedrock's Converse API.
 
 Customize this file with your agent logic — add tools, change the model,
 or adjust the system prompt.
@@ -10,19 +10,23 @@ or adjust the system prompt.
 import os
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from strands import Agent
-from strands.models import BedrockModel
 
 app = BedrockAgentCoreApp()
 
-model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0")
-region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+_client = None
 
-model = BedrockModel(model_id=model_id, region_name=region)
-agent = Agent(
-    model=model,
-    system_prompt="You are a helpful AI assistant. Be concise and friendly.",
-)
+SYSTEM_PROMPT = "You are a helpful AI assistant. Be concise and friendly."
+
+
+def _get_client():
+    """Lazy-init the Bedrock Runtime client on first request."""
+    global _client
+    if _client is None:
+        import boto3
+
+        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        _client = boto3.client("bedrock-runtime", region_name=region)
+    return _client
 
 
 @app.entrypoint
@@ -40,8 +44,17 @@ def handler(payload):
     if not user_message:
         return {"message": "Please send a message."}
 
-    result = agent(user_message)
-    return {"message": result.message}
+    model_id = os.environ.get(
+        "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    client = _get_client()
+    resp = client.converse(
+        modelId=model_id,
+        system=[{"text": SYSTEM_PROMPT}],
+        messages=[{"role": "user", "content": [{"text": user_message}]}],
+    )
+    reply = resp["output"]["message"]["content"][0]["text"]
+    return {"message": reply}
 
 
 if __name__ == "__main__":

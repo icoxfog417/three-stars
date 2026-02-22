@@ -244,6 +244,18 @@ def _install_dependencies(requirements: Path, target_dir: Path) -> None:
 
 _EXCLUDED_SUFFIXES = {".dist-info", ".egg-info"}
 
+# Packages already available in the AgentCore PYTHON_3_11 runtime.
+# Bundling them bloats the zip (botocore alone is ~22 MB / 1900+ files)
+# and causes the 30-second cold-start initialization limit to be exceeded.
+_RUNTIME_PROVIDED_PACKAGES = {
+    "boto3",
+    "botocore",
+    "s3transfer",
+    "jmespath",
+    "dateutil",
+    "urllib3",
+}
+
 
 def _add_directory_to_zip(zf: zipfile.ZipFile, root: Path, base: Path) -> None:
     """Add all files under *root* into *zf*, relative to *base*."""
@@ -256,7 +268,12 @@ def _add_directory_to_zip(zf: zipfile.ZipFile, root: Path, base: Path) -> None:
             continue
         if any(p.endswith(s) for p in file_path.parts for s in _EXCLUDED_SUFFIXES):
             continue
-        arcname = str(file_path.relative_to(base))
+        # Skip packages already provided by the AgentCore runtime
+        rel = file_path.relative_to(base)
+        top_dir = rel.parts[0] if rel.parts else ""
+        if top_dir in _RUNTIME_PROVIDED_PACKAGES:
+            continue
+        arcname = str(rel)
         zf.write(file_path, arcname)
 
 
