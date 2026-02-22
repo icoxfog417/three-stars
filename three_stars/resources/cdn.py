@@ -188,6 +188,11 @@ def _create_distribution(
         origins.append(lambda_origin)
 
         api_pattern = f"{api_prefix}/*" if not api_prefix.endswith("/*") else api_prefix
+        # Use managed policies: CachingDisabled + AllViewerExceptHostHeader.
+        # Forwarding the Host header breaks OAC SigV4 signing for Lambda URLs.
+        _CACHE_POLICY_CACHING_DISABLED = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+        _ORP_ALL_VIEWER_EXCEPT_HOST = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
+
         api_cache_behavior = {
             "PathPattern": api_pattern,
             "TargetOriginId": lambda_origin_id,
@@ -198,14 +203,8 @@ def _create_distribution(
                 "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
             },
             "Compress": True,
-            "ForwardedValues": {
-                "QueryString": True,
-                "Cookies": {"Forward": "all"},
-                "Headers": {"Quantity": 1, "Items": ["*"]},
-            },
-            "MinTTL": 0,
-            "DefaultTTL": 0,
-            "MaxTTL": 0,
+            "CachePolicyId": _CACHE_POLICY_CACHING_DISABLED,
+            "OriginRequestPolicyId": _ORP_ALL_VIEWER_EXCEPT_HOST,
         }
 
         if edge_function_arn:

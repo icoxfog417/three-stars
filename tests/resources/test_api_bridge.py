@@ -124,8 +124,9 @@ class TestGrantCloudfrontAccess:
             for s in policy["Statement"]
             if s.get("Principal", {}).get("Service") == "cloudfront.amazonaws.com"
         ]
-        assert len(cf_stmts) == 1
-        assert cf_stmts[0]["Action"] == "lambda:InvokeFunctionUrl"
+        assert len(cf_stmts) == 2
+        actions = {s["Action"] for s in cf_stmts}
+        assert actions == {"lambda:InvokeFunctionUrl", "lambda:InvokeFunction"}
 
     def test_idempotent(self):
         session = boto3.Session(region_name="us-east-1")

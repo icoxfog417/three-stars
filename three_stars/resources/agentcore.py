@@ -53,6 +53,9 @@ def deploy(
     agent_key = f"agents/{config.name}/agent.zip"
     _upload_agent_package(session, bucket_name, agent_zip, agent_key)
 
+    # Set AWS_DEFAULT_REGION so agent code can create regional clients
+    env_vars = {"AWS_DEFAULT_REGION": config.region}
+
     if existing and not _is_empty_state(existing):
         # Update existing runtime
         runtime = _update_agent_runtime(
@@ -62,6 +65,7 @@ def deploy(
             s3_key=agent_key,
             role_arn=role_arn,
             description=config.agent.description,
+            environment_variables=env_vars,
         )
         return AgentCoreState(
             iam_role_name=names.agentcore_role,
@@ -80,6 +84,7 @@ def deploy(
         s3_key=agent_key,
         role_arn=role_arn,
         description=config.agent.description,
+        environment_variables=env_vars,
     )
 
     # Create endpoint
@@ -317,7 +322,10 @@ def _create_iam_role(
                     "bedrock:InvokeModel",
                     "bedrock:InvokeModelWithResponseStream",
                 ],
-                "Resource": f"arn:aws:bedrock:*:{account_id}:*",
+                "Resource": [
+                    f"arn:aws:bedrock:*:{account_id}:*",
+                    "arn:aws:bedrock:*::foundation-model/*",
+                ],
             },
             {
                 "Effect": "Allow",
@@ -347,6 +355,7 @@ def _create_agent_runtime(
     description: str = "",
     entry_point: list[str] | None = None,
     runtime: str = "PYTHON_3_11",
+    environment_variables: dict[str, str] | None = None,
 ) -> dict:
     """Create a Bedrock AgentCore runtime."""
     client = session.client("bedrock-agentcore-control")
@@ -366,6 +375,7 @@ def _create_agent_runtime(
         },
         "roleArn": role_arn,
         "networkConfiguration": {"networkMode": "PUBLIC"},
+        "environmentVariables": environment_variables or {},
     }
 
     resp = client.create_agent_runtime(**kwargs)
@@ -386,6 +396,7 @@ def _update_agent_runtime(
     description: str = "",
     entry_point: list[str] | None = None,
     runtime: str = "PYTHON_3_11",
+    environment_variables: dict[str, str] | None = None,
 ) -> dict:
     """Update an existing AgentCore runtime with new code."""
     client = session.client("bedrock-agentcore-control")
@@ -404,6 +415,8 @@ def _update_agent_runtime(
         },
         "networkConfiguration": {"networkMode": "PUBLIC"},
     }
+    if environment_variables is not None:
+        kwargs["environmentVariables"] = environment_variables
 
     if description:
         kwargs["description"] = description

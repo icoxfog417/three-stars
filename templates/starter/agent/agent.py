@@ -35,7 +35,8 @@ def handler(request):
     model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0")
 
     try:
-        bedrock = boto3.client("bedrock-runtime")
+        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        bedrock = boto3.client("bedrock-runtime", region_name=region)
         response = bedrock.invoke_model(
             modelId=model_id,
             contentType="application/json",

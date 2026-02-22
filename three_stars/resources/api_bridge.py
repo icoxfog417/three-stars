@@ -153,20 +153,37 @@ def grant_cloudfront_access(
     function_name: str,
     distribution_arn: str,
 ) -> None:
-    """Grant CloudFront OAC permission to invoke the Lambda function URL."""
+    """Grant CloudFront OAC permission to invoke the Lambda function URL.
+
+    Adds both ``lambda:InvokeFunctionUrl`` (for OAC signing) and
+    ``lambda:InvokeFunction`` (required on accounts that block public
+    Lambda function URL access, which is the default since 2024).
+    """
     lam = session.client("lambda")
-    try:
-        lam.add_permission(
-            FunctionName=function_name,
-            StatementId="AllowCloudFrontOAC",
-            Action="lambda:InvokeFunctionUrl",
-            Principal="cloudfront.amazonaws.com",
-            SourceArn=distribution_arn,
-            FunctionUrlAuthType="AWS_IAM",
-        )
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "ResourceConflictException":
-            raise
+    for sid, action, kwargs in [
+        (
+            "AllowCloudFrontOAC",
+            "lambda:InvokeFunctionUrl",
+            {"FunctionUrlAuthType": "AWS_IAM"},
+        ),
+        (
+            "AllowCloudFrontInvoke",
+            "lambda:InvokeFunction",
+            {},
+        ),
+    ]:
+        try:
+            lam.add_permission(
+                FunctionName=function_name,
+                StatementId=sid,
+                Action=action,
+                Principal="cloudfront.amazonaws.com",
+                SourceArn=distribution_arn,
+                **kwargs,
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ResourceConflictException":
+                raise
 
 
 def _build_function_zip() -> bytes:
