@@ -1,29 +1,33 @@
 """AgentCore resource module — IAM role + runtime + endpoint.
 
-Uses bedrock-agentcore-control (CRUD) and bedrock-agentcore (invocation).
+Uses bedrock-agentcore-starter-toolkit for code packaging, runtime CRUD,
+and endpoint polling, with custom IAM logic.
 """
 
 from __future__ import annotations
 
-import io
 import json
-import subprocess
-import tempfile
 import time
-import zipfile
 from pathlib import Path
 
-import boto3
+from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
+from bedrock_agentcore_starter_toolkit.utils.runtime.create_with_iam_eventual_consistency import (
+    retry_create_with_eventual_iam_consistency,
+)
+from bedrock_agentcore_starter_toolkit.utils.runtime.package import CodeZipPackager
 from botocore.exceptions import ClientError
 
 from three_stars.config import ProjectConfig, resolve_path
 from three_stars.naming import ResourceNames
 from three_stars.resources import ResourceStatus
+from three_stars.resources._base import AWSContext
 from three_stars.state import AgentCoreState
+
+_RUNTIME_VERSION = "PYTHON_3_11"
 
 
 def deploy(
-    session: boto3.Session,
+    ctx: AWSContext,
     config: ProjectConfig,
     names: ResourceNames,
     *,
@@ -34,7 +38,7 @@ def deploy(
     """Create or update AgentCore resources.
 
     Args:
-        session: boto3 session.
+        ctx: AWS context.
         config: Project configuration.
         names: Computed resource names.
         bucket_name: S3 bucket for agent code upload.
@@ -44,77 +48,110 @@ def deploy(
     Returns:
         AgentCoreState capturing all resource outputs.
     """
-    account_id = session.client("sts").get_caller_identity()["Account"]
-    role_arn = _create_iam_role(session, names.agentcore_role, account_id, tags=tags)
+    role_arn = _create_iam_role(ctx, names.agentcore_role, ctx.account_id, tags=tags)
 
     # Package and upload agent code
     agent_path = resolve_path(config, config.agent.source)
-    agent_zip = _package_agent(agent_path)
     agent_key = f"agents/{config.name}/agent.zip"
-    _upload_agent_package(session, bucket_name, agent_zip, agent_key)
+    _package_and_upload(ctx, agent_path, names.agent_name, bucket_name, agent_key)
 
     # Set AWS_DEFAULT_REGION so agent code can create regional clients
     env_vars = {"AWS_DEFAULT_REGION": config.region}
 
-    if existing and not _is_empty_state(existing):
-        # Update existing runtime
-        runtime = _update_agent_runtime(
-            session,
-            runtime_id=existing.runtime_id,
-            s3_bucket=bucket_name,
-            s3_key=agent_key,
-            role_arn=role_arn,
-            description=config.agent.description,
-            environment_variables=env_vars,
-        )
-        return AgentCoreState(
-            iam_role_name=names.agentcore_role,
-            iam_role_arn=role_arn,
-            runtime_id=existing.runtime_id,
-            runtime_arn=runtime["runtime_arn"],
-            endpoint_name=existing.endpoint_name,
-            endpoint_arn=existing.endpoint_arn,
-        )
+    # Determine whether this is a create or update
+    agent_id = existing.runtime_id if existing and not _is_empty_state(existing) else None
 
-    # Create new runtime
-    runtime = _create_agent_runtime(
-        session,
-        name=names.agent_name,
-        s3_bucket=bucket_name,
-        s3_key=agent_key,
-        role_arn=role_arn,
-        description=config.agent.description,
-        environment_variables=env_vars,
+    toolkit_client = BedrockAgentCoreClient(region=config.region)
+
+    agent_info = retry_create_with_eventual_iam_consistency(
+        create_function=lambda: toolkit_client.create_or_update_agent(
+            agent_id=agent_id,
+            agent_name=names.agent_name,
+            execution_role_arn=role_arn,
+            deployment_type="direct_code_deploy",
+            code_s3_bucket=bucket_name,
+            code_s3_key=agent_key,
+            runtime_type=_RUNTIME_VERSION,
+            entrypoint_array=["agent.py"],
+            network_config={"networkMode": "PUBLIC"},
+            env_vars=env_vars,
+            auto_update_on_conflict=True,
+        ),
+        execution_role_arn=role_arn,
     )
 
-    # Create endpoint
-    endpoint = _create_agent_runtime_endpoint(session, runtime["runtime_id"], names.endpoint_name)
+    runtime_id = agent_info["id"]
+    runtime_arn = agent_info["arn"]
+
+    # Wait for the DEFAULT endpoint to become ready (auto-created with runtime)
+    endpoint_arn = toolkit_client.wait_for_agent_endpoint_ready(
+        agent_id=runtime_id,
+        endpoint_name="DEFAULT",
+        max_wait=300,
+    )
+
+    # The toolkit returns a non-ARN string on timeout
+    if not isinstance(endpoint_arn, str) or not endpoint_arn.startswith("arn:"):
+        raise TimeoutError(
+            f"AgentCore endpoint for runtime {runtime_id} did not reach READY "
+            f"within 300s: {endpoint_arn}"
+        )
 
     return AgentCoreState(
         iam_role_name=names.agentcore_role,
         iam_role_arn=role_arn,
-        runtime_id=runtime["runtime_id"],
-        runtime_arn=runtime["runtime_arn"],
-        endpoint_name=endpoint["endpoint_name"],
-        endpoint_arn=endpoint["endpoint_arn"],
+        runtime_id=runtime_id,
+        runtime_arn=runtime_arn,
+        endpoint_name="DEFAULT",
+        endpoint_arn=endpoint_arn,
     )
 
 
-def destroy(session: boto3.Session, state: AgentCoreState) -> None:
+def set_resource_policy(
+    ctx: AWSContext,
+    *,
+    runtime_arn: str,
+    edge_role_arn: str,
+) -> None:
+    """Attach a resource-based policy to restrict AgentCore invocation.
+
+    Only the Lambda@Edge IAM role is allowed to invoke the runtime.
+    """
+    client = ctx.client("bedrock-agentcore-control")
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {"AWS": edge_role_arn},
+                "Action": "bedrock-agentcore:InvokeAgentRuntime",
+                "Resource": runtime_arn,
+            }
+        ],
+    }
+    client.put_resource_policy(
+        resourceArn=runtime_arn,
+        policy=json.dumps(policy),
+    )
+
+
+def destroy(ctx: AWSContext, state: AgentCoreState) -> None:
     """Delete AgentCore resources."""
-    client = session.client("bedrock-agentcore-control")
+    client = ctx.client("bedrock-agentcore-control")
 
-    # Delete endpoint
-    try:
-        client.delete_agent_runtime_endpoint(
-            agentRuntimeId=state.runtime_id,
-            endpointName=state.endpoint_name,
-        )
-    except ClientError as e:
-        if e.response["Error"]["Code"] != "ResourceNotFoundException":
-            raise
+    # Legacy deployments may have a non-DEFAULT endpoint; delete it explicitly.
+    # For DEFAULT endpoints, deleting the runtime auto-deletes the endpoint.
+    if state.endpoint_name and state.endpoint_name != "DEFAULT":
+        try:
+            client.delete_agent_runtime_endpoint(
+                agentRuntimeId=state.runtime_id,
+                endpointName=state.endpoint_name,
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                raise
 
-    # Delete runtime
+    # Delete runtime (DEFAULT endpoint is auto-deleted)
     try:
         client.delete_agent_runtime(agentRuntimeId=state.runtime_id)
     except ClientError as e:
@@ -122,10 +159,10 @@ def destroy(session: boto3.Session, state: AgentCoreState) -> None:
             raise
 
     # Delete IAM role
-    _delete_iam_role(session, state.iam_role_name)
+    _delete_iam_role(ctx, state.iam_role_name)
 
 
-def get_status(session: boto3.Session, state: AgentCoreState) -> list[ResourceStatus]:
+def get_status(ctx: AWSContext, state: AgentCoreState) -> list[ResourceStatus]:
     """Return status rows for AgentCore resources."""
     rows: list[ResourceStatus] = []
 
@@ -133,7 +170,7 @@ def get_status(session: boto3.Session, state: AgentCoreState) -> list[ResourceSt
     name = "AgentCore Runtime"
     rid = state.runtime_id
     try:
-        client = session.client("bedrock-agentcore-control")
+        client = ctx.client("bedrock-agentcore-control")
         resp = client.get_agent_runtime(agentRuntimeId=rid)
         status = resp.get("status", "UNKNOWN")
         if status == "READY":
@@ -158,148 +195,40 @@ def _is_empty_state(state: AgentCoreState) -> bool:
     return not state.runtime_id
 
 
-def _package_agent(agent_dir: str | Path) -> bytes:
-    """Package agent source + pip dependencies into a deployment zip.
+def _package_and_upload(
+    ctx: AWSContext,
+    agent_path: Path,
+    agent_name: str,
+    bucket_name: str,
+    key: str,
+) -> None:
+    """Package agent code with toolkit's CodeZipPackager and upload to S3."""
+    packager = CodeZipPackager()
+    cache_dir = agent_path / ".bedrock_agentcore" / agent_name
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    If the agent directory contains a requirements.txt, dependencies are
-    installed via ``uv`` (with ``pip`` as fallback) cross-compiled for
-    ARM64 Linux so they work on the AgentCore runtime.  The final zip
-    layers dependencies first, then source code (source wins on conflict).
-    """
-    agent_path = Path(agent_dir)
     requirements = agent_path / "requirements.txt"
 
-    with tempfile.TemporaryDirectory() as tmp:
-        deps_dir = Path(tmp) / "deps"
-        deps_dir.mkdir()
+    deployment_zip, _ = packager.create_deployment_package(
+        source_dir=agent_path,
+        agent_name=agent_name,
+        cache_dir=cache_dir,
+        runtime_version=_RUNTIME_VERSION,
+        requirements_file=requirements if requirements.exists() else None,
+    )
 
-        if requirements.exists():
-            _install_dependencies(requirements, deps_dir)
-
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            # Layer 1: installed dependencies
-            _add_directory_to_zip(zf, deps_dir, deps_dir)
-
-            # Layer 2: agent source code (overwrites on conflict)
-            _add_directory_to_zip(zf, agent_path, agent_path)
-
-    return buffer.getvalue()
-
-
-def _install_dependencies(requirements: Path, target_dir: Path) -> None:
-    """Install pip dependencies into *target_dir* for ARM64 Linux.
-
-    Tries ``uv`` first (fast, supports cross-compilation natively).
-    Falls back to ``pip`` if ``uv`` is not installed.
-    """
-    uv_cmd = [
-        "uv",
-        "pip",
-        "install",
-        "--target",
-        str(target_dir),
-        "--python-version",
-        "3.11",
-        "--python-platform",
-        "aarch64-manylinux2014",
-        "--only-binary",
-        ":all:",
-        "-r",
-        str(requirements),
-    ]
-
-    try:
-        subprocess.run(uv_cmd, check=True, capture_output=True, text=True)
-        return
-    except FileNotFoundError:
-        pass  # uv not installed — try pip
-
-    pip_cmd = [
-        "pip",
-        "install",
-        "--target",
-        str(target_dir),
-        "--platform",
-        "manylinux2014_aarch64",
-        "--python-version",
-        "3.11",
-        "--only-binary",
-        ":all:",
-        "--implementation",
-        "cp",
-        "-r",
-        str(requirements),
-    ]
-
-    try:
-        subprocess.run(pip_cmd, check=True, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Neither 'uv' nor 'pip' found. Install one to bundle agent dependencies."
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Failed to install agent dependencies:\n{exc.stderr}") from exc
-
-
-# Keep .dist-info directories — the AgentCore runtime uses importlib.metadata
-# for package resolution during startup.  Stripping them causes the 30-second
-# cold-start initialization to fail.
-_EXCLUDED_SUFFIXES = {".egg-info"}
-
-# Packages already available in the AgentCore PYTHON_3_11 runtime.
-# Bundling them bloats the zip (botocore alone is ~22 MB / 1900+ files)
-# and causes the 30-second cold-start initialization limit to be exceeded.
-_RUNTIME_PROVIDED_PACKAGES = {
-    "boto3",
-    "botocore",
-    "s3transfer",
-    "jmespath",
-    "dateutil",
-    "urllib3",
-}
-
-
-def _add_directory_to_zip(zf: zipfile.ZipFile, root: Path, base: Path) -> None:
-    """Add all files under *root* into *zf*, relative to *base*."""
-    for file_path in sorted(root.rglob("*")):
-        if file_path.is_dir():
-            continue
-        if "__pycache__" in file_path.parts:
-            continue
-        if file_path.name.startswith("."):
-            continue
-        if any(p.endswith(s) for p in file_path.parts for s in _EXCLUDED_SUFFIXES):
-            continue
-        # Skip packages already provided by the AgentCore runtime
-        rel = file_path.relative_to(base)
-        top_dir = rel.parts[0] if rel.parts else ""
-        if top_dir in _RUNTIME_PROVIDED_PACKAGES:
-            continue
-        arcname = str(rel)
-        zf.write(file_path, arcname)
-
-
-def _upload_agent_package(
-    session: boto3.Session,
-    bucket_name: str,
-    agent_zip: bytes,
-    key: str = "agent.zip",
-) -> tuple[str, str]:
-    """Upload agent zip package to S3 staging bucket."""
-    s3 = session.client("s3")
-    s3.put_object(Bucket=bucket_name, Key=key, Body=agent_zip)
-    return bucket_name, key
+    s3 = ctx.client("s3")
+    s3.upload_file(str(deployment_zip), bucket_name, key)
 
 
 def _create_iam_role(
-    session: boto3.Session,
+    ctx: AWSContext,
     role_name: str,
     account_id: str,
     tags: list[dict[str, str]] | None = None,
 ) -> str:
     """Create an IAM role for AgentCore runtime execution. Returns the role ARN."""
-    iam = session.client("iam")
+    iam = ctx.client("iam")
 
     trust_policy = {
         "Version": "2012-10-17",
@@ -366,167 +295,9 @@ def _create_iam_role(
     return role_arn
 
 
-def _create_agent_runtime(
-    session: boto3.Session,
-    name: str,
-    s3_bucket: str,
-    s3_key: str,
-    role_arn: str,
-    description: str = "",
-    entry_point: list[str] | None = None,
-    runtime: str = "PYTHON_3_11",
-    environment_variables: dict[str, str] | None = None,
-) -> dict:
-    """Create a Bedrock AgentCore runtime."""
-    client = session.client("bedrock-agentcore-control")
-
-    if entry_point is None:
-        entry_point = ["agent.py"]
-
-    kwargs = {
-        "agentRuntimeName": name,
-        "description": description or f"three-stars runtime: {name}",
-        "agentRuntimeArtifact": {
-            "codeConfiguration": {
-                "code": {"s3": {"bucket": s3_bucket, "prefix": s3_key}},
-                "runtime": runtime,
-                "entryPoint": entry_point,
-            },
-        },
-        "roleArn": role_arn,
-        "networkConfiguration": {"networkMode": "PUBLIC"},
-        "environmentVariables": environment_variables or {},
-    }
-
-    resp = client.create_agent_runtime(**kwargs)
-    runtime_id = resp["agentRuntimeId"]
-    runtime_arn = resp["agentRuntimeArn"]
-
-    _wait_for_runtime_ready(client, runtime_id)
-
-    return {"runtime_id": runtime_id, "runtime_arn": runtime_arn}
-
-
-def _update_agent_runtime(
-    session: boto3.Session,
-    runtime_id: str,
-    s3_bucket: str,
-    s3_key: str,
-    role_arn: str,
-    description: str = "",
-    entry_point: list[str] | None = None,
-    runtime: str = "PYTHON_3_11",
-    environment_variables: dict[str, str] | None = None,
-) -> dict:
-    """Update an existing AgentCore runtime with new code."""
-    client = session.client("bedrock-agentcore-control")
-
-    if entry_point is None:
-        entry_point = ["agent.py"]
-
-    kwargs: dict = {
-        "agentRuntimeId": runtime_id,
-        "agentRuntimeArtifact": {
-            "codeConfiguration": {
-                "code": {"s3": {"bucket": s3_bucket, "prefix": s3_key}},
-                "runtime": runtime,
-                "entryPoint": entry_point,
-            },
-        },
-        "networkConfiguration": {"networkMode": "PUBLIC"},
-    }
-    if environment_variables is not None:
-        kwargs["environmentVariables"] = environment_variables
-
-    if description:
-        kwargs["description"] = description
-    if role_arn:
-        kwargs["roleArn"] = role_arn
-
-    resp = client.update_agent_runtime(**kwargs)
-    runtime_arn = resp["agentRuntimeArn"]
-
-    _wait_for_runtime_ready(client, runtime_id)
-
-    return {"runtime_id": runtime_id, "runtime_arn": runtime_arn}
-
-
-def _create_agent_runtime_endpoint(
-    session: boto3.Session,
-    runtime_id: str,
-    endpoint_name: str,
-) -> dict:
-    """Create an endpoint for an AgentCore runtime."""
-    client = session.client("bedrock-agentcore-control")
-
-    resp = client.create_agent_runtime_endpoint(
-        agentRuntimeId=runtime_id,
-        name=endpoint_name,
-    )
-    endpoint_arn = resp["agentRuntimeEndpointArn"]
-
-    _wait_for_endpoint_ready(client, runtime_id, endpoint_name)
-
-    return {"endpoint_name": endpoint_name, "endpoint_arn": endpoint_arn}
-
-
-def _wait_for_runtime_ready(
-    client,
-    runtime_id: str,
-    max_wait_seconds: int = 300,
-    poll_interval: int = 10,
-) -> None:
-    """Poll until runtime reaches READY status."""
-    start = time.time()
-    while time.time() - start < max_wait_seconds:
-        resp = client.get_agent_runtime(agentRuntimeId=runtime_id)
-        status = resp.get("status", "")
-        if status == "READY":
-            return
-        if status in ("CREATE_FAILED", "UPDATE_FAILED"):
-            raise RuntimeError(
-                f"AgentCore runtime {runtime_id} entered {status} state: "
-                f"{resp.get('failureReason', 'unknown reason')}"
-            )
-        time.sleep(poll_interval)
-
-    raise TimeoutError(
-        f"AgentCore runtime {runtime_id} did not reach READY status within {max_wait_seconds}s"
-    )
-
-
-def _wait_for_endpoint_ready(
-    client,
-    runtime_id: str,
-    endpoint_name: str,
-    max_wait_seconds: int = 300,
-    poll_interval: int = 10,
-) -> None:
-    """Poll until endpoint reaches READY status."""
-    start = time.time()
-    while time.time() - start < max_wait_seconds:
-        resp = client.get_agent_runtime_endpoint(
-            agentRuntimeId=runtime_id,
-            endpointName=endpoint_name,
-        )
-        status = resp.get("status", "")
-        if status == "READY":
-            return
-        if status in ("CREATE_FAILED", "UPDATE_FAILED"):
-            raise RuntimeError(
-                f"AgentCore endpoint {endpoint_name} entered {status} state: "
-                f"{resp.get('failureReason', 'unknown reason')}"
-            )
-        time.sleep(poll_interval)
-
-    raise TimeoutError(
-        f"AgentCore endpoint {endpoint_name} did not reach READY within {max_wait_seconds}s"
-    )
-
-
-def _delete_iam_role(session: boto3.Session, role_name: str) -> None:
+def _delete_iam_role(ctx: AWSContext, role_name: str) -> None:
     """Delete the IAM role and its inline policies."""
-    iam = session.client("iam")
+    iam = ctx.client("iam")
     try:
         policies = iam.list_role_policies(RoleName=role_name)
         for policy_name in policies.get("PolicyNames", []):

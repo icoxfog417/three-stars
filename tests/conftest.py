@@ -34,9 +34,7 @@ def sample_config_dict():
         "region": "us-east-1",
         "agent": {
             "source": "./agent",
-            "model": "anthropic.claude-sonnet-4-20250514",
             "description": "Test agent",
-            "memory": 512,
         },
         "app": {
             "source": "./app",

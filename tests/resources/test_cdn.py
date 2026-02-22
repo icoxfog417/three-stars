@@ -16,7 +16,7 @@ from three_stars.resources.cdn import (
 
 @mock_aws
 class TestOriginAccessControl:
-    """Tests for OAC creation (S3 and Lambda types)."""
+    """Tests for OAC creation (S3 type only — Lambda OAC removed)."""
 
     def test_create_s3_oac(self):
         session = boto3.Session(region_name="us-east-1")
@@ -27,18 +27,6 @@ class TestOriginAccessControl:
         resp = cf.get_origin_access_control(Id=oac_id)
         config = resp["OriginAccessControl"]["OriginAccessControlConfig"]
         assert config["OriginAccessControlOriginType"] == "s3"
-        assert config["SigningProtocol"] == "sigv4"
-        assert config["SigningBehavior"] == "always"
-
-    def test_create_lambda_oac(self):
-        session = boto3.Session(region_name="us-east-1")
-        oac_id = _create_origin_access_control(session, "test-lambda-oac", origin_type="lambda")
-        assert oac_id
-
-        cf = session.client("cloudfront")
-        resp = cf.get_origin_access_control(Id=oac_id)
-        config = resp["OriginAccessControl"]["OriginAccessControlConfig"]
-        assert config["OriginAccessControlOriginType"] == "lambda"
         assert config["SigningProtocol"] == "sigv4"
         assert config["SigningBehavior"] == "always"
 
@@ -54,27 +42,25 @@ class TestOriginAccessControl:
 
 @mock_aws
 class TestDistribution:
-    """Tests for CloudFront distribution with Lambda OAC."""
+    """Tests for CloudFront distribution with AgentCore origin."""
 
     def _setup_s3_bucket(self, session, bucket_name="test-bucket"):
         s3 = session.client("s3")
         s3.create_bucket(Bucket=bucket_name)
         return bucket_name
 
-    def test_create_distribution_with_lambda_oac(self):
-        """Distribution should include Lambda origin with OAC."""
+    def test_create_distribution_with_agentcore_origin(self):
+        """Distribution should include AgentCore custom HTTPS origin."""
         session = boto3.Session(region_name="us-east-1")
         self._setup_s3_bucket(session)
         s3_oac_id = _create_origin_access_control(session, "s3-oac")
-        lambda_oac_id = _create_origin_access_control(session, "lambda-oac", origin_type="lambda")
 
         result = _create_distribution(
             session,
             bucket_name="test-bucket",
             region="us-east-1",
             oac_id=s3_oac_id,
-            lambda_function_url="https://abc123.lambda-url.us-east-1.on.aws/",
-            lambda_oac_id=lambda_oac_id,
+            agentcore_region="us-east-1",
         )
 
         assert result["distribution_id"]
@@ -85,12 +71,12 @@ class TestDistribution:
         resp = cf.get_distribution(Id=result["distribution_id"])
         origins = resp["Distribution"]["DistributionConfig"]["Origins"]["Items"]
 
-        lambda_origin = next((o for o in origins if o["Id"] == "Lambda-API-Bridge"), None)
-        assert lambda_origin is not None
-        assert lambda_origin["DomainName"] == "abc123.lambda-url.us-east-1.on.aws"
+        ac_origin = next((o for o in origins if o["Id"] == "AgentCore-API"), None)
+        assert ac_origin is not None
+        assert ac_origin["DomainName"] == "bedrock-agentcore.us-east-1.amazonaws.com"
 
-    def test_distribution_without_lambda(self):
-        """Distribution without Lambda should have only S3 origin."""
+    def test_distribution_without_agentcore(self):
+        """Distribution without AgentCore should have only S3 origin."""
         session = boto3.Session(region_name="us-east-1")
         self._setup_s3_bucket(session)
         oac_id = _create_origin_access_control(session, "s3-oac")

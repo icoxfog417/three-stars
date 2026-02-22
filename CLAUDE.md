@@ -4,9 +4,13 @@ This document outlines the workflow and rules for AI-assisted development on thi
 
 ## Project Overview
 
-<!-- TODO: Describe your project here -->
-<!-- Example: This project creates a web application for ... -->
-<!-- Include: purpose, key technologies, target users -->
+three-stars is a CLI tool (`sss`) that deploys AI-powered web applications to AWS with a single command. It provisions Bedrock AgentCore, CloudFront + S3, and Lambda@Edge resources. Primary language is Python (>= 3.12). Lint with `ruff`, format with `ruff format`.
+
+## General Principles
+
+1. **Implement quickly, don't over-plan.** When asked to implement something, start writing code. Do NOT spend entire sessions on exploration and planning without producing implementation code. If research is needed, timebox it to a few minutes and confirm the approach before deep-diving.
+2. **Prefer simple, minimal solutions.** Do NOT introduce unnecessary abstractions, helper functions, or new modules unless explicitly asked. When refactoring, keep the architecture flat and straightforward. If you think a new abstraction is needed, ask first.
+3. **Verify AWS facts before stating them.** When unsure about AWS service capabilities or API support, check official AWS documentation FIRST before making assumptions. Never state something is unsupported without verifying.
 
 ## Specification Management
 
@@ -138,10 +142,10 @@ git commit -m "feat: Add feature X proposal (see spec/proposals/20260201_impleme
 
 ### Testing and Validation
 
+- After making changes, always run `uv run pytest` and `uv run ruff check three_stars/ tests/` before committing. Verify all tests pass.
 - Ensure changes align with requirements in `spec/requirements.md`
 - Validate against architecture in `spec/design.md`
 - Update task status in `spec/tasks.md`
-- Run all tests before committing
 
 ### Commit Messages
 
@@ -315,24 +319,12 @@ We maintain high code quality through automated tooling and consistent practices
 4. **Automated Enforcement**: Pre-commit hooks ensure quality before code is committed
 5. **Minimal Dependencies**: Only include dependencies that are truly necessary
 
-<!-- TODO: Configure your specific tooling below -->
-<!--
 ### Tooling
 
-**Linter** - Catches bugs and enforces best practices:
-- Language-specific linting rules
-- Zero warnings allowed in commits
-- Auto-fix enabled where possible
-
-**Formatter** - Ensures consistent code formatting:
-- Configured formatting rules
-- Auto-format on commit
-
-**Pre-commit Hooks** - Automated pre-commit checks:
-- Runs formatter on all staged files
-- Runs linter with auto-fix
-- Prevents commits with errors
--->
+- **Python >= 3.12** — `from __future__ import annotations` is not needed in new code
+- **Linter/Formatter**: `ruff` — run `uv run ruff check three_stars/ tests/` and `uv run ruff format three_stars/ tests/`
+- **Tests**: `uv run pytest`
+- **Package manager**: `uv`
 
 ### Best Practices
 
@@ -390,6 +382,11 @@ When addressing automated PR review comments, apply critical judgment rather tha
 **Address with code comment only:**
 - Missing pagination on queries that return tiny result sets (document the assumption instead)
 
+## Documentation
+
+- For Japanese translations (README_ja.md), produce natural-sounding Japanese rather than literal translations. Sync Japanese files whenever English READMEs are updated.
+- Keep README.md in sync with actual CLI behavior and deployment steps.
+
 ## Communication
 
 - Use clear, descriptive language in all documentation
@@ -414,5 +411,5 @@ If you encounter ambiguity or need clarification:
 
 ---
 
-**Last Updated**: YYYY-MM-DD
+**Last Updated**: 2026-02-22
 **Maintained By**: Project Team

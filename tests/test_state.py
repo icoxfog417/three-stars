@@ -69,6 +69,5 @@ class TestState:
         state = create_initial_state("test-app", "us-east-1")
         assert state.agentcore is None
         assert state.storage is None
-        assert state.api_bridge is None
         assert state.edge is None
         assert state.cdn is None

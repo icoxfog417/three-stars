@@ -6,7 +6,7 @@ Deploy AI-powered web applications to AWS with a single command.
 
 1. **AI Backend** — Amazon Bedrock AgentCore hosts your agent code
 2. **Frontend CDN** — Amazon CloudFront + S3 serves your static site
-3. **API Bridge** — Lambda routes `/api/*` requests to your agent
+3. **API Edge** — Lambda@Edge routes `/api/*` requests to your agent with SigV4 signing
 
 ## Quick Start
 
@@ -54,17 +54,26 @@ sss deploy
 This provisions all AWS resources and prints your CloudFront URL:
 
 ```
-[1/5] S3 storage ready
-[2/5] AgentCore ready
-[3/5] Lambda API bridge ready
-[4/5] Lambda@Edge function ready
-[5/5] CloudFront distribution created (propagation ~5-10 min)
+[1/5] S3 storage ready                   0:00:02
+[2/5] AgentCore ready                    0:00:15
+[3/5] Lambda@Edge function ready         0:00:04
+[4/5] CloudFront distribution deployed   0:05:32
+[5/5] AgentCore resource policy set      0:00:01
+
+     Post-Deployment Health Check
+┌────────────┬───────────────────┬──────────┐
+│ Resource   │ ID / Name         │ Status   │
+├────────────┼───────────────────┼──────────┤
+│ S3 Bucket  │ sss-my-app-…      │ Active   │
+│ AgentCore  │ rt-abc123         │ Active   │
+│ CloudFront │ E1234567890       │ Deployed │
+└────────────┴───────────────────┴──────────┘
 
 Deployed successfully!
 URL: https://d1234567890.cloudfront.net
 ```
 
-The five steps map to the three stars: **AI Backend** (steps 2), **Frontend CDN** (steps 1, 5), and **API Bridge** (steps 3, 4).
+The five steps map to the three stars: **AI Backend** (steps 2, 5), **Frontend CDN** (steps 1, 4), and **API Edge** (step 3). Use `--verbose` for extra detail (ARNs, policy names).
 
 ### Check status
 
@@ -72,10 +81,22 @@ The five steps map to the three stars: **AI Backend** (steps 2), **Frontend CDN*
 sss status
 ```
 
+Use `--sync` to discover actual resources from AWS and update the local state file:
+
+```bash
+sss status --sync
+```
+
 ### Tear down
 
 ```bash
 sss destroy
+```
+
+Use `--name` to discover and destroy resources by project name when the state file is missing:
+
+```bash
+sss destroy --name my-app --region us-east-1
 ```
 
 ## Configuration
@@ -88,7 +109,7 @@ region: us-east-1
 
 agent:
   source: ./agent
-  model: anthropic.claude-sonnet-4-20250514
+  model: us.anthropic.claude-sonnet-4-6
   description: "My AI assistant"
   memory: 512
 
@@ -102,12 +123,32 @@ api:
 
 ### CLI Options
 
+**`sss deploy`**
+
 | Flag | Description |
 |------|------------|
 | `--region` | Override AWS region |
 | `--profile` | AWS CLI profile name |
 | `--yes` / `-y` | Skip confirmation prompts |
 | `--force` | Recreate all resources from scratch |
+| `--verbose` / `-v` | Print detailed progress |
+
+**`sss status`**
+
+| Flag | Description |
+|------|------------|
+| `--region` | Override AWS region |
+| `--profile` | AWS CLI profile name |
+| `--sync` | Refresh state from AWS before showing status |
+
+**`sss destroy`**
+
+| Flag | Description |
+|------|------------|
+| `--region` | Override AWS region |
+| `--profile` | AWS CLI profile name |
+| `--yes` / `-y` | Skip confirmation prompt |
+| `--name` | Project name for discovery (when state file is missing) |
 | `--verbose` / `-v` | Print detailed progress |
 
 ## Architecture
@@ -118,9 +159,8 @@ User Browser
     ▼
 CloudFront Distribution (HTTPS CDN)
     ├── /* ──────────► S3 Bucket (static frontend)
-    └── /api/* ──────► Lambda API Bridge ──► Bedrock AgentCore
-                        (via Lambda@Edge      (AI agent runtime)
-                         OAC signing)
+    └── /api/* ──────► Lambda@Edge ──► Bedrock AgentCore
+                        (SigV4 signing)   (AI agent runtime)
 ```
 
 ### AWS Resources Created
@@ -129,10 +169,9 @@ CloudFront Distribution (HTTPS CDN)
 |----------|---------|---------|
 | S3 Bucket | Amazon S3 | Frontend static files (private, OAC access) |
 | AgentCore Runtime | Bedrock AgentCore | Runs AI agent code with Bedrock model access |
-| Lambda Function | AWS Lambda | Bridges API requests to AgentCore |
-| Lambda@Edge Function | AWS Lambda@Edge | Computes SHA256 for OAC request signing |
+| Lambda@Edge Function | AWS Lambda@Edge | SigV4 signing for API requests to AgentCore |
 | CloudFront Distribution | Amazon CloudFront | CDN with HTTPS |
-| IAM Roles | AWS IAM | Execution permissions (AgentCore, Lambda, Lambda@Edge) |
+| IAM Roles | AWS IAM | Execution permissions (AgentCore, Lambda@Edge) |
 
 ## Prerequisites
 

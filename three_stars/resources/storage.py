@@ -6,17 +6,17 @@ import json
 import mimetypes
 from pathlib import Path
 
-import boto3
 from botocore.exceptions import ClientError
 
 from three_stars.config import ProjectConfig, resolve_path
 from three_stars.naming import ResourceNames
 from three_stars.resources import ResourceStatus
+from three_stars.resources._base import AWSContext
 from three_stars.state import StorageState
 
 
 def deploy(
-    session: boto3.Session,
+    ctx: AWSContext,
     config: ProjectConfig,
     names: ResourceNames,
     *,
@@ -29,23 +29,23 @@ def deploy(
     """
     bucket_name = names.bucket
 
-    _create_bucket(session, bucket_name, config.region)
+    _create_bucket(ctx, bucket_name, config.region)
 
     if tags:
-        _tag_bucket(session, bucket_name, tags)
+        _tag_bucket(ctx, bucket_name, tags)
 
     # Upload frontend files
     app_path = resolve_path(config, config.app.source)
-    _upload_directory(session, bucket_name, app_path)
+    _upload_directory(ctx, bucket_name, app_path)
 
     return StorageState(s3_bucket=bucket_name)
 
 
-def destroy(session: boto3.Session, state: StorageState) -> None:
+def destroy(ctx: AWSContext, state: StorageState) -> None:
     """Empty and delete S3 bucket."""
-    s3 = session.client("s3")
+    s3 = ctx.client("s3")
     try:
-        _empty_bucket(session, state.s3_bucket)
+        _empty_bucket(ctx, state.s3_bucket)
         s3.delete_bucket(Bucket=state.s3_bucket)
     except ClientError as e:
         if e.response["Error"]["Code"] == "NoSuchBucket":
@@ -53,10 +53,10 @@ def destroy(session: boto3.Session, state: StorageState) -> None:
         raise
 
 
-def get_status(session: boto3.Session, state: StorageState) -> list[ResourceStatus]:
+def get_status(ctx: AWSContext, state: StorageState) -> list[ResourceStatus]:
     """Return status rows for storage resources."""
     try:
-        s3 = session.client("s3")
+        s3 = ctx.client("s3")
         s3.head_bucket(Bucket=state.s3_bucket)
         return [ResourceStatus("S3 Bucket", state.s3_bucket, "[green]Active[/green]")]
     except Exception:
@@ -64,12 +64,12 @@ def get_status(session: boto3.Session, state: StorageState) -> list[ResourceStat
 
 
 def set_bucket_policy_for_cloudfront(
-    session: boto3.Session,
+    ctx: AWSContext,
     bucket_name: str,
     cloudfront_distribution_arn: str,
 ) -> None:
     """Set bucket policy to allow CloudFront OAC access."""
-    s3 = session.client("s3")
+    s3 = ctx.client("s3")
     policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -90,9 +90,9 @@ def set_bucket_policy_for_cloudfront(
     s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
 
 
-def _create_bucket(session: boto3.Session, bucket_name: str, region: str) -> str:
+def _create_bucket(ctx: AWSContext, bucket_name: str, region: str) -> str:
     """Create an S3 bucket. Idempotent."""
-    s3 = session.client("s3")
+    s3 = ctx.client("s3")
     try:
         if region == "us-east-1":
             s3.create_bucket(Bucket=bucket_name)
@@ -122,12 +122,12 @@ def _create_bucket(session: boto3.Session, bucket_name: str, region: str) -> str
 
 
 def _tag_bucket(
-    session: boto3.Session,
+    ctx: AWSContext,
     bucket_name: str,
     tags: list[dict[str, str]],
 ) -> None:
     """Apply tags to an S3 bucket."""
-    s3 = session.client("s3")
+    s3 = ctx.client("s3")
     s3.put_bucket_tagging(
         Bucket=bucket_name,
         Tagging={"TagSet": tags},
@@ -135,13 +135,13 @@ def _tag_bucket(
 
 
 def _upload_directory(
-    session: boto3.Session,
+    ctx: AWSContext,
     bucket_name: str,
     local_dir: str | Path,
     prefix: str = "",
 ) -> int:
     """Upload all files from a local directory to S3."""
-    s3 = session.client("s3")
+    s3 = ctx.client("s3")
     local_path = Path(local_dir)
     count = 0
 
@@ -167,9 +167,9 @@ def _upload_directory(
     return count
 
 
-def _empty_bucket(session: boto3.Session, bucket_name: str) -> int:
+def _empty_bucket(ctx: AWSContext, bucket_name: str) -> int:
     """Delete all objects in an S3 bucket."""
-    s3 = session.client("s3")
+    s3 = ctx.client("s3")
     count = 0
 
     paginator = s3.get_paginator("list_objects_v2")

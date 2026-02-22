@@ -13,8 +13,7 @@ class TestLoadConfig:
         config = load_config(project_dir)
         assert config.name == "test-app"
         assert config.region == "us-east-1"
-        assert config.agent.model == "anthropic.claude-sonnet-4-20250514"
-        assert config.agent.memory == 512
+        assert config.agent.model == "us.anthropic.claude-sonnet-4-6"
         assert config.app.index == "index.html"
         assert config.api.prefix == "/api"
 
@@ -73,7 +72,6 @@ class TestLoadConfig:
         assert config.name == "minimal-app"
         assert config.region == "us-east-1"
         assert config.agent.source == "./agent"
-        assert config.agent.memory == 512
         assert config.app.source == "./app"
         assert config.app.index == "index.html"
         assert config.api.prefix == "/api"
@@ -90,17 +88,6 @@ class TestLoadConfig:
 
         shutil.rmtree(project_dir / "app")
         with pytest.raises(ConfigError, match="App source directory not found"):
-            load_config(project_dir)
-
-    def test_invalid_memory_low(self, project_dir):
-        config_path = project_dir / "three-stars.yml"
-        with open(config_path) as f:
-            data = yaml.safe_load(f)
-        data["agent"]["memory"] = 64
-        with open(config_path, "w") as f:
-            yaml.dump(data, f)
-
-        with pytest.raises(ConfigError, match="at least 128"):
             load_config(project_dir)
 
     def test_invalid_api_prefix(self, project_dir):

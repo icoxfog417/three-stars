@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from three_stars.config import ProjectConfig, get_resource_prefix
+from three_stars.config import ProjectConfig
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,11 @@ class ResourceNames:
     lambda_function: str
     edge_role: str
     edge_function: str
+
+
+def get_resource_prefix(config: ProjectConfig) -> str:
+    """Generate a prefix for AWS resource names."""
+    return f"sss-{config.name}"
 
 
 def compute_names(config: ProjectConfig, account_id: str) -> ResourceNames:

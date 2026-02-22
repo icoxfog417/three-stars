@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+from three_stars.resources._base import AWSContext
+
+__all__ = ["AWSContext", "ResourceStatus"]
+
 
 class ResourceStatus(NamedTuple):
     """A single row in the status table."""

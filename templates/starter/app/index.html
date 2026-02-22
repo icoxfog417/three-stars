@@ -39,6 +39,7 @@
             padding: 0.75rem 1rem;
             border-radius: 8px;
             max-width: 85%;
+            white-space: pre-wrap;
         }
         .message.user {
             background: #1a3a5c;
@@ -96,6 +97,21 @@
             if (e.key === 'Enter' && !sendBtn.disabled) sendMessage();
         });
 
+        function extractText(event) {
+            if (typeof event === 'string') return event;
+            if (!event || typeof event !== 'object') return '';
+            if (typeof event.data === 'string') return event.data;
+            if (typeof event.text === 'string') return event.text;
+            if (event.delta && typeof event.delta.text === 'string') return event.delta.text;
+            if (event.contentBlockDelta &&
+                event.contentBlockDelta.delta &&
+                typeof event.contentBlockDelta.delta.text === 'string') {
+                return event.contentBlockDelta.delta.text;
+            }
+            if (typeof event.message === 'string') return event.message;
+            return '';
+        }
+
         async function sendMessage() {
             const text = inputEl.value.trim();
             if (!text) return;
@@ -104,16 +120,54 @@
             inputEl.value = '';
             sendBtn.disabled = true;
 
+            const msgDiv = addMessage('', 'assistant');
+
             try {
                 const resp = await fetch('/api/invoke', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: text }),
                 });
-                const data = await resp.json();
-                addMessage(data.message || data.response || JSON.stringify(data), 'assistant');
+
+                const contentType = resp.headers.get('Content-Type') || '';
+
+                if (contentType.includes('text/event-stream')) {
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (!line.startsWith('data:')) continue;
+                            const payload = line.slice(5).trim();
+                            if (!payload || payload === '[DONE]') continue;
+                            try {
+                                const event = JSON.parse(payload);
+                                const chunk = extractText(event);
+                                if (chunk) {
+                                    msgDiv.textContent += chunk;
+                                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                                }
+                            } catch (_) { /* skip malformed SSE lines */ }
+                        }
+                    }
+                } else {
+                    const data = await resp.json();
+                    msgDiv.textContent = data.message || data.response || JSON.stringify(data);
+                }
+
+                if (!msgDiv.textContent) {
+                    msgDiv.textContent = '(empty response)';
+                }
             } catch (err) {
-                addMessage('Error: Could not reach the agent. Is it deployed?', 'assistant');
+                msgDiv.textContent = 'Error: Could not reach the agent. Is it deployed?';
             } finally {
                 sendBtn.disabled = false;
                 inputEl.focus();
@@ -126,6 +180,7 @@
             div.textContent = text;
             messagesEl.appendChild(div);
             messagesEl.scrollTop = messagesEl.scrollHeight;
+            return div;
         }
     </script>
 </body>

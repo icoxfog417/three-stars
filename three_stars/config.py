@@ -15,9 +15,8 @@ class ConfigError(Exception):
 @dataclass
 class AgentConfig:
     source: str = "./agent"
-    model: str = "anthropic.claude-sonnet-4-20250514"
+    model: str = "us.anthropic.claude-sonnet-4-6"
     description: str = ""
-    memory: int = 512
 
 
 @dataclass
@@ -96,7 +95,6 @@ def load_config(
         source=agent_raw.get("source", "./agent"),
         model=agent_raw.get("model", AgentConfig.model),
         description=agent_raw.get("description", ""),
-        memory=agent_raw.get("memory", 512),
     )
 
     app_raw = raw.get("app", {})
@@ -135,11 +133,15 @@ def load_config(
 
 def _validate_config(config: ProjectConfig) -> None:
     """Validate config values after loading."""
-    # Validate project name (used in AWS resource names)
-    if not config.name.replace("-", "").replace("_", "").isalnum():
+    # Validate project name (used in AWS resource names, including S3 buckets)
+    if not config.name.replace("-", "").isalnum():
         raise ConfigError(
             f"Project name '{config.name}' contains invalid characters. "
-            "Use only letters, numbers, hyphens, and underscores."
+            "Use only lowercase letters, numbers, and hyphens."
+        )
+    if config.name != config.name.lower():
+        raise ConfigError(
+            f"Project name '{config.name}' must be lowercase. Try: '{config.name.lower()}'"
         )
     if len(config.name) > 50:
         raise ConfigError("Project name must be 50 characters or fewer.")
@@ -159,12 +161,6 @@ def _validate_config(config: ProjectConfig) -> None:
             f"Create it or update 'app.source' in {CONFIG_FILENAME}."
         )
 
-    # Validate memory
-    if config.agent.memory < 128:
-        raise ConfigError("Agent memory must be at least 128 MB.")
-    if config.agent.memory > 10240:
-        raise ConfigError("Agent memory must be at most 10240 MB.")
-
     # Validate API prefix
     if not config.api.prefix.startswith("/"):
         raise ConfigError(f"API prefix must start with '/', got '{config.api.prefix}'")
@@ -173,11 +169,6 @@ def _validate_config(config: ProjectConfig) -> None:
 def resolve_path(config: ProjectConfig, relative: str) -> Path:
     """Resolve a relative path against the project directory."""
     return (config.project_dir / relative).resolve()
-
-
-def get_resource_prefix(config: ProjectConfig) -> str:
-    """Generate a prefix for AWS resource names."""
-    return f"sss-{config.name}"
 
 
 def get_resource_tags(config: ProjectConfig) -> dict[str, str]:
@@ -198,8 +189,3 @@ def get_resource_tags(config: ProjectConfig) -> dict[str, str]:
 def tags_to_aws(tags: dict[str, str]) -> list[dict[str, str]]:
     """Convert a tags dict to the AWS Tags format: [{"Key": k, "Value": v}]."""
     return [{"Key": k, "Value": v} for k, v in tags.items()]
-
-
-def get_state_file_path(project_dir: str | Path = ".") -> Path:
-    """Get the path to the deployment state file."""
-    return Path(project_dir).resolve() / ".three-stars-state.json"

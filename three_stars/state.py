@@ -1,4 +1,4 @@
-"""Deployment state management with typed dataclasses."""
+"""Deployment state persistence with typed dataclasses."""
 
 from __future__ import annotations
 
@@ -28,15 +28,6 @@ class StorageState:
 
 
 @dataclass
-class ApiBridgeState:
-    role_name: str
-    role_arn: str
-    function_name: str
-    function_arn: str
-    function_url: str
-
-
-@dataclass
 class EdgeState:
     role_name: str
     role_arn: str
@@ -62,7 +53,6 @@ class DeploymentState:
     updated_at: str | None = None
     agentcore: AgentCoreState | None = None
     storage: StorageState | None = None
-    api_bridge: ApiBridgeState | None = None
     edge: EdgeState | None = None
     cdn: CdnState | None = None
 
@@ -70,7 +60,6 @@ class DeploymentState:
 _RESOURCE_STATE_CLASSES = {
     "agentcore": AgentCoreState,
     "storage": StorageState,
-    "api_bridge": ApiBridgeState,
     "edge": EdgeState,
     "cdn": CdnState,
 }

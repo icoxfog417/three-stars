@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import warnings
 
 import click
 from rich.console import Console
 
 from three_stars import __version__
 from three_stars.config import ConfigError, load_config
+
+warnings.filterwarnings("ignore", message=".*urllib3.*chardet.*")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -69,7 +73,10 @@ def deploy(
         console.print(f"[bold]URL:[/bold] https://{result['cloudfront_domain']}")
         console.print()
         console.print("[dim]Recovery commands:[/dim]")
-        console.print("[dim]  Revert code: git checkout HEAD~1 -- agent/ app/ && sss deploy[/dim]")
+        if os.path.isdir(os.path.join(project_dir, ".git")):
+            console.print(
+                "[dim]  Revert code: git checkout HEAD~1 -- agent/ app/ && sss deploy[/dim]"
+            )
         console.print("[dim]  Clean slate: sss destroy --yes && sss deploy[/dim]")
     except Exception as e:
         err_console.print(f"[red]Deployment failed:[/red] {e}")
@@ -85,15 +92,26 @@ def deploy(
 @click.argument("project_dir", default=".", type=click.Path())
 @click.option("--region", default=None, help="AWS region (overrides config file).")
 @click.option("--profile", default=None, help="AWS CLI profile name.")
-def status(project_dir: str, region: str | None, profile: str | None) -> None:
+@click.option("--sync", is_flag=True, help="Refresh state from AWS before showing status.")
+def status(project_dir: str, region: str | None, profile: str | None, sync: bool) -> None:
     """Show deployment status.
 
     Reads the deployment state file and queries AWS for current resource status.
+    Use --sync to discover actual resources from AWS and update the state file.
     """
     from three_stars.status import run_status
 
+    config = None
+    if sync or region:
+        try:
+            config = load_config(project_dir, region_override=region)
+        except ConfigError:
+            if sync:
+                err_console.print("[red]--sync requires a valid three-stars.yml config file.[/red]")
+                sys.exit(1)
+
     try:
-        run_status(project_dir, profile=profile)
+        run_status(project_dir, profile=profile, sync=sync, config=config)
     except Exception as e:
         err_console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -104,15 +122,36 @@ def status(project_dir: str, region: str | None, profile: str | None) -> None:
 @click.option("--region", default=None, help="AWS region (overrides config file).")
 @click.option("--profile", default=None, help="AWS CLI profile name.")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
-def destroy(project_dir: str, region: str | None, profile: str | None, yes: bool) -> None:
+@click.option(
+    "--name",
+    default=None,
+    help="Project name for tag-based discovery (when state file is missing).",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Print detailed progress.")
+def destroy(
+    project_dir: str,
+    region: str | None,
+    profile: str | None,
+    yes: bool,
+    name: str | None,
+    verbose: bool,
+) -> None:
     """Destroy all deployed AWS resources.
 
     Reads the deployment state file and tears down resources in reverse order.
+    Use --name to discover resources by tag when the state file is missing.
     """
     from three_stars.destroy import run_destroy
 
     try:
-        run_destroy(project_dir, profile=profile, skip_confirm=yes)
+        run_destroy(
+            project_dir,
+            profile=profile,
+            skip_confirm=yes,
+            name=name,
+            region=region,
+            verbose=verbose,
+        )
     except Exception as e:
         err_console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
