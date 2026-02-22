@@ -1,7 +1,7 @@
 """Starter agent for three-stars.
 
 This agent receives messages from the frontend via the /api/invoke endpoint
-and responds using Amazon Bedrock's Converse API.
+and responds using a Strands Agent powered by Amazon Bedrock.
 
 Customize this file with your agent logic — add tools, change the model,
 or adjust the system prompt.
@@ -13,20 +13,27 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 app = BedrockAgentCoreApp()
 
-_client = None
+# Lazy-init: defer heavy imports to first request so module load stays
+# under the AgentCore 30-second cold-start initialization limit.
+_agent = None
 
-SYSTEM_PROMPT = "You are a helpful AI assistant. Be concise and friendly."
 
+def _get_agent():
+    global _agent
+    if _agent is None:
+        from strands import Agent
+        from strands.models import BedrockModel
 
-def _get_client():
-    """Lazy-init the Bedrock Runtime client on first request."""
-    global _client
-    if _client is None:
-        import boto3
-
+        model_id = os.environ.get(
+            "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        )
         region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-        _client = boto3.client("bedrock-runtime", region_name=region)
-    return _client
+        model = BedrockModel(model_id=model_id, region_name=region)
+        _agent = Agent(
+            model=model,
+            system_prompt="You are a helpful AI assistant. Be concise and friendly.",
+        )
+    return _agent
 
 
 @app.entrypoint
@@ -44,17 +51,9 @@ def handler(payload):
     if not user_message:
         return {"message": "Please send a message."}
 
-    model_id = os.environ.get(
-        "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0"
-    )
-    client = _get_client()
-    resp = client.converse(
-        modelId=model_id,
-        system=[{"text": SYSTEM_PROMPT}],
-        messages=[{"role": "user", "content": [{"text": user_message}]}],
-    )
-    reply = resp["output"]["message"]["content"][0]["text"]
-    return {"message": reply}
+    agent = _get_agent()
+    result = agent(user_message)
+    return {"message": result.message}
 
 
 if __name__ == "__main__":
