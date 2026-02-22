@@ -1,60 +1,59 @@
 """Starter agent for three-stars.
 
 This agent receives messages from the frontend via the /api/invoke endpoint
-and responds using Amazon Bedrock.
+and responds using a Strands Agent powered by Amazon Bedrock.
 
-Customize this file with your agent logic.
+Customize this file with your agent logic — add tools, change the model,
+or adjust the system prompt.
 """
 
-import json
 import os
 
-from bedrock_agentcore import BedrockAgentCoreApp
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 app = BedrockAgentCoreApp()
 
+# Lazy-init: defer heavy imports to first request so module load stays
+# under the AgentCore 30-second cold-start initialization limit.
+_agent = None
+
+
+def _get_agent():
+    global _agent
+    if _agent is None:
+        from strands import Agent
+        from strands.models import BedrockModel
+
+        model_id = os.environ.get(
+            "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        )
+        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        model = BedrockModel(model_id=model_id, region_name=region)
+        _agent = Agent(
+            model=model,
+            system_prompt="You are a helpful AI assistant. Be concise and friendly.",
+        )
+    return _agent
+
 
 @app.entrypoint
-def handler(request):
+def handler(payload):
     """Handle incoming requests from the frontend.
 
     Args:
-        request: Request payload dict with 'message' field.
+        payload: Request payload dict with 'prompt' or 'message' field.
 
     Returns:
         Response dict with 'message' field.
     """
-    user_message = request.get("message") or request.get("prompt", "")
+    user_message = payload.get("prompt") or payload.get("message", "")
 
     if not user_message:
         return {"message": "Please send a message."}
 
-    # Call Bedrock for a response
-    import boto3
-
-    model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-20250514-v1:0")
-
-    try:
-        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-        bedrock = boto3.client("bedrock-runtime", region_name=region)
-        response = bedrock.invoke_model(
-            modelId=model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1024,
-                "messages": [
-                    {"role": "user", "content": user_message}
-                ],
-            }),
-        )
-        result = json.loads(response["body"].read())
-        assistant_message = result["content"][0]["text"]
-    except Exception as e:
-        assistant_message = f"I'm having trouble connecting to the model. Error: {e}"
-
-    return {"message": assistant_message}
+    agent = _get_agent()
+    result = agent(user_message)
+    return {"message": result.message}
 
 
 if __name__ == "__main__":

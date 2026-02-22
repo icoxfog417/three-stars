@@ -134,7 +134,7 @@ def _create_origin_access_control(
                 for item in page["OriginAccessControlList"].get("Items", []):
                     if item["Name"] == name:
                         return item["Id"]
-            raise RuntimeError(f"OAC '{name}' exists but could not be found in listing")
+            raise RuntimeError(f"OAC '{name}' exists but could not be found in listing") from None
         raise
 
 
@@ -288,6 +288,32 @@ def _get_distribution(session: boto3.Session, distribution_id: str) -> dict:
         "enabled": dist["DistributionConfig"]["Enabled"],
         "etag": resp["ETag"],
     }
+
+
+def invalidate_cache(
+    session: boto3.Session,
+    distribution_id: str,
+    paths: list[str] | None = None,
+) -> None:
+    """Create a CloudFront cache invalidation.
+
+    Args:
+        distribution_id: CloudFront distribution ID.
+        paths: List of paths to invalidate. Defaults to ``["/*"]``.
+    """
+    import contextlib
+
+    cf = session.client("cloudfront")
+    if paths is None:
+        paths = ["/*"]
+    with contextlib.suppress(ClientError):
+        cf.create_invalidation(
+            DistributionId=distribution_id,
+            InvalidationBatch={
+                "Paths": {"Quantity": len(paths), "Items": paths},
+                "CallerReference": str(uuid.uuid4()),
+            },
+        )
 
 
 def _delete_distribution(session: boto3.Session, distribution_id: str) -> None:

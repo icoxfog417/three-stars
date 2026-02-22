@@ -158,6 +158,10 @@ def run_deploy(
         )
         progress.remove_task(task)
 
+    # Invalidate CloudFront cache on updates so frontend changes are visible immediately
+    if is_update and state.cdn:
+        cdn.invalidate_cache(sess, state.cdn.distribution_id)
+
     # Post-deployment health check
     _print_health_check(sess, state)
 
