@@ -173,6 +173,47 @@ CloudFront Distribution (HTTPS CDN)
 | CloudFront Distribution | Amazon CloudFront | CDN with HTTPS |
 | IAM Roles | AWS IAM | Execution permissions (AgentCore, Lambda@Edge) |
 
+## MCP Server
+
+three-stars includes an [MCP](https://modelcontextprotocol.io/) server so AI agents (Claude Desktop, Claude Code, etc.) can deploy and manage apps programmatically.
+
+### Claude Code
+
+Add to your Claude Code MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "three-stars": {
+      "command": "uvx",
+      "args": ["three-stars-mcp"]
+    }
+  }
+}
+```
+
+For local development:
+
+```json
+{
+  "mcpServers": {
+    "three-stars": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/three-stars", "run", "three-stars-mcp"]
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `sss_init` | Create a new three-stars project |
+| `sss_deploy` | Deploy the project to AWS |
+| `sss_status` | Show deployment status |
+| `sss_destroy` | Destroy all deployed AWS resources |
+
 ## Prerequisites
 
 - Python 3.12+

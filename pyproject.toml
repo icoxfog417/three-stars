@@ -27,6 +27,7 @@ dependencies = [
     "bedrock-agentcore-starter-toolkit>=0.3.0",
     "boto3>=1.35",
     "click>=8.1",
+    "mcp>=1.0",
     "pyyaml>=6.0",
     "rich>=13.0",
 ]
@@ -41,6 +42,7 @@ dev = [
 [project.scripts]
 sss = "three_stars.cli:main"
 three-stars = "three_stars.cli:main"
+three-stars-mcp = "three_stars.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/icoxfog417/three-stars"
