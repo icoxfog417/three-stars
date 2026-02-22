@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "aws-mcp": {
+      "command": "uvx",
+      "timeout": 100000,
+      "transport": "stdio",
+      "args": [
+        "mcp-proxy-for-aws@latest",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--metadata", "AWS_REGION=us-east-1"
+      ]
+    },
+    "aws-knowledge-mcp-server": {
+      "url": "https://knowledge-mcp.global.api.aws",
+      "type": "http",
+      "disabled": false
+    },
+    "strands": {
+      "command": "uvx",
+      "args": ["strands-agents-mcp-server"]
+    }
+  }
+}
