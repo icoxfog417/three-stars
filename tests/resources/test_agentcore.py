@@ -101,15 +101,13 @@ class TestPackageAgent:
         assert "agent.py" in zf.namelist()
 
     @patch("three_stars.resources.agentcore.subprocess.run", side_effect=_fake_uv_install)
-    def test_excludes_dist_info(self, mock_run, tmp_path):
-        """Dist-info directories from pip should be excluded."""
+    def test_includes_dist_info(self, mock_run, tmp_path):
+        """Dist-info directories must be kept for importlib.metadata resolution."""
         agent_dir = tmp_path / "agent"
         agent_dir.mkdir()
         (agent_dir / "agent.py").write_text("def handler(): pass")
         (agent_dir / "requirements.txt").write_text("bedrock-agentcore")
 
-        # Simulate dist-info in the deps dir — we patch _install_dependencies
-        # to also create dist-info alongside the package
         original = _fake_uv_install
 
         def install_with_distinfo(cmd, **kwargs):
@@ -125,7 +123,7 @@ class TestPackageAgent:
 
         result = _package_agent(agent_dir)
         zf = zipfile.ZipFile(BytesIO(result))
-        assert not any(".dist-info" in name for name in zf.namelist())
+        assert any(".dist-info" in name for name in zf.namelist())
 
 
 class TestInstallDependencies:

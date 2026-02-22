@@ -242,7 +242,10 @@ def _install_dependencies(requirements: Path, target_dir: Path) -> None:
         raise RuntimeError(f"Failed to install agent dependencies:\n{exc.stderr}") from exc
 
 
-_EXCLUDED_SUFFIXES = {".dist-info", ".egg-info"}
+# Keep .dist-info directories — the AgentCore runtime uses importlib.metadata
+# for package resolution during startup.  Stripping them causes the 30-second
+# cold-start initialization to fail.
+_EXCLUDED_SUFFIXES = {".egg-info"}
 
 # Packages already available in the AgentCore PYTHON_3_11 runtime.
 # Bundling them bloats the zip (botocore alone is ~22 MB / 1900+ files)
