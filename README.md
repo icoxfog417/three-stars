@@ -1,50 +1,121 @@
-# three-stars
+# Three Stars ⭐⭐⭐
 
-Deploy AI-powered web applications to AWS with a single command.
+The fastest AI agent deployment tool for prototyping on AWS.
 
-**three-stars** handles three layers of your deployment — the "three stars":
+Three Stars doesn't require you to set up CDK, wait for CloudFormation stack deployments, or struggle with circular dependency errors. All you need is Python — the same language you use to develop your AI agent. Our promise and principles are as follows.
 
-1. **AI Backend** — Amazon Bedrock AgentCore hosts your agent code
-2. **Frontend CDN** — Amazon CloudFront + S3 serves your static site
-3. **API Edge** — Lambda@Edge routes `/api/*` requests to your agent with SigV4 signing
+- **Speed** — Deployment speed is our top priority
+- **Steps** — Streamlined steps including tool setup and error handling
+- **Small** — Just enough for prototyping
+
+Three Stars provides the `sss` command (short for **s**peed **s**tep **s**mall) for quick deployment. Commands are available both as a CLI and as an MCP server for your AI coding agent.
+
+| Command | Description |
+|---------|-------------|
+| `sss init <name>` | Scaffold a new project with config, frontend, and agent templates |
+| `sss deploy` | Deploy (or redeploy) the project to AWS — S3, AgentCore, Lambda@Edge, CloudFront |
+| `sss status` | Show deployment status of all AWS resources |
+| `sss destroy` | Tear down all deployed AWS resources |
+
 
 ## Quick Start
 
-### Install
+**Prerequisites:**
+
+- Python 3.12+
+- AWS credentials configured (`aws configure`)
+- Permissions for S3, CloudFront, IAM, Lambda, and Bedrock AgentCore
+
+### Use with AI Agents (Recommended)
+
+The easiest way to use three-stars is through an AI coding agent. three-stars provides scaffolding tools for agents like Claude Code.
+
+Add this to your Claude Code MCP settings.
+
+```json
+{
+  "mcpServers": {
+    "three-stars": {
+      "command": "uvx",
+      "args": ["three-stars-mcp"]
+    }
+  }
+}
+```
+
+### Install as CLI
 
 ```bash
 pip install three-stars
 ```
 
-This installs the `sss` command (short for **s**imple **s**erverless **s**tack).
+This installs the `sss` command. From zero to deployed in four lines:
 
-### Create a project
+```bash
+pip install three-stars
+sss init my-app && cd my-app
+sss deploy
+# Open the printed CloudFront URL in your browser
+```
+
+### How Commands Work
+
+#### Scaffold a Project : `sss init`
 
 ```bash
 sss init my-app
 cd my-app
 ```
 
-This creates:
+This creates the following structure:
 
 ```
 my-app/
 ├── three-stars.yml     # Configuration
-├── app/                # Frontend (HTML/CSS/JS)
+├── app/                # Frontend — use any framework (React, Vue, etc.)
 │   └── index.html
 └── agent/              # AI agent (Python)
     ├── agent.py        # Strands Agent with SSE streaming
     ├── tools.py        # MCP tool loader
-    └── memory.py       # AgentCore Memory session manager
+    ├── memory.py       # AgentCore Memory session manager
+    └── mcp.json        # MCP server configuration
 ```
 
-### Deploy
+The `app/` directory starts with a plain HTML file, but you can replace it with your favorite frontend framework — React, Vue, Svelte, or anything that builds to static files. Just point `app.source` in the config to your build output directory.
+
+The `agent/` directory contains a starter [Strands Agent](https://github.com/strands-agents/strands-agents-python) that streams responses as Server-Sent Events. It supports:
+
+- **MCP Tools** — add tool servers in `agent/mcp.json` (stdio and HTTP transports). Environment variable references (`${VAR}`) and AWS credentials are forwarded automatically.
+- **Conversation Memory** — when AgentCore Memory is configured, conversation history is preserved across turns within a session.
+
+`three-stars.yml` controls your deployment:
+
+```yaml
+name: my-ai-app
+region: us-east-1
+
+agent:
+  source: ./agent
+  model: us.anthropic.claude-sonnet-4-6  # Any Bedrock model ID
+  description: "My AI assistant"
+
+app:
+  source: ./app
+  index: index.html
+
+api:
+  prefix: /api
+```
+
+#### Deploy to AWS : `sss deploy`
+
+Deploy your application to AWS.
 
 ```bash
 sss deploy
 ```
 
-This provisions all AWS resources and prints your CloudFront URL. First deploy typically completes in **~5 minutes**:
+First deploy typically completes in **~5 minutes**.
 
 ```
 [1/5] S3 storage ready                   0:00:01
@@ -66,15 +137,48 @@ Deployed successfully!
 URL: https://d1234567890.cloudfront.net
 ```
 
-The five steps map to the three stars: **AI Backend** (steps 2, 5), **Frontend CDN** (steps 1, 4), and **API Edge** (step 3). Use `--verbose` for extra detail (ARNs, policy names).
+Open the URL to see your AI agent chat app — the frontend streams responses in real time with Markdown rendering and tool call indicators.
 
-Subsequent deploys are even faster — dependencies are cached and only changed resources update:
+![Deployed application](demo_ja.png)
+
+```mermaid
+graph LR
+    Browser["User Browser"]
+    CF["CloudFront Distribution<br/>(HTTPS CDN)"]
+    S3["S3 Bucket<br/>(Static Frontend)"]
+    Edge["Lambda@Edge<br/>(SigV4 Signing)"]
+    AC["Bedrock AgentCore<br/>(AI Agent Runtime)"]
+
+    Browser --> CF
+    CF -- "/*" --> S3
+    CF -- "/api/*" --> Edge --> AC
+```
+
+| Resource | Service | Purpose |
+|----------|---------|---------|
+| S3 Bucket | Amazon S3 | Frontend static files (private, OAC access) |
+| AgentCore Runtime | Bedrock AgentCore | Runs AI agent code with Bedrock model access |
+| Lambda@Edge Function | AWS Lambda@Edge | SigV4 signing for API requests to AgentCore |
+| CloudFront Distribution | Amazon CloudFront | CDN with HTTPS |
+| IAM Roles | AWS IAM | Execution permissions (AgentCore, Lambda@Edge) |
+
+Subsequent deploys are even faster because dependencies are cached and only changed resources update.
 
 ```bash
 sss deploy  # ~23 seconds on redeploy
 ```
 
-### Check status
+| Flag | Description |
+|------|------------|
+| `--region` | Override AWS region |
+| `--profile` | AWS CLI profile name |
+| `--yes` / `-y` | Skip confirmation prompts |
+| `--force` | Recreate all resources from scratch |
+| `--verbose` / `-v` | Print detailed progress (ARNs, policy names) |
+
+#### Check Status : `sss status`
+
+Show deployment status of all AWS resources.
 
 ```bash
 sss status
@@ -86,7 +190,15 @@ Use `--sync` to discover actual resources from AWS and update the local state fi
 sss status --sync
 ```
 
-### Tear down
+| Flag | Description |
+|------|------------|
+| `--region` | Override AWS region |
+| `--profile` | AWS CLI profile name |
+| `--sync` | Refresh state from AWS before showing status |
+
+#### Tear Down : `sss destroy`
+
+Remove all deployed AWS resources.
 
 ```bash
 sss destroy
@@ -98,50 +210,6 @@ Use `--name` to discover and destroy resources by project name when the state fi
 sss destroy --name my-app --region us-east-1
 ```
 
-## Configuration
-
-`three-stars.yml` controls your deployment:
-
-```yaml
-name: my-ai-app
-region: us-east-1
-
-agent:
-  source: ./agent
-  model: us.anthropic.claude-sonnet-4-6
-  description: "My AI assistant"
-  memory: 512
-
-app:
-  source: ./app
-  index: index.html
-
-api:
-  prefix: /api
-```
-
-### CLI Options
-
-**`sss deploy`**
-
-| Flag | Description |
-|------|------------|
-| `--region` | Override AWS region |
-| `--profile` | AWS CLI profile name |
-| `--yes` / `-y` | Skip confirmation prompts |
-| `--force` | Recreate all resources from scratch |
-| `--verbose` / `-v` | Print detailed progress |
-
-**`sss status`**
-
-| Flag | Description |
-|------|------------|
-| `--region` | Override AWS region |
-| `--profile` | AWS CLI profile name |
-| `--sync` | Refresh state from AWS before showing status |
-
-**`sss destroy`**
-
 | Flag | Description |
 |------|------------|
 | `--region` | Override AWS region |
@@ -150,97 +218,11 @@ api:
 | `--name` | Project name for discovery (when state file is missing) |
 | `--verbose` / `-v` | Print detailed progress |
 
-## Architecture
+> **Note:** Lambda@Edge functions cannot be deleted immediately. AWS cleans up edge replicas asynchronously after the CloudFront distribution is removed, which can take 30–60 minutes. If replicas still exist, `sss destroy` will report that the function remains and you can safely re-run the command later to finish cleanup.
 
-```
-User Browser
-    │
-    ▼
-CloudFront Distribution (HTTPS CDN)
-    ├── /* ──────────► S3 Bucket (static frontend)
-    └── /api/* ──────► Lambda@Edge ──► Bedrock AgentCore
-                        (SigV4 signing)   (AI agent runtime)
-```
+## Development
 
-### AWS Resources Created
-
-| Resource | Service | Purpose |
-|----------|---------|---------|
-| S3 Bucket | Amazon S3 | Frontend static files (private, OAC access) |
-| AgentCore Runtime | Bedrock AgentCore | Runs AI agent code with Bedrock model access |
-| Lambda@Edge Function | AWS Lambda@Edge | SigV4 signing for API requests to AgentCore |
-| CloudFront Distribution | Amazon CloudFront | CDN with HTTPS |
-| IAM Roles | AWS IAM | Execution permissions (AgentCore, Lambda@Edge) |
-
-## Deployment Performance
-
-Measured from end-to-end developer experience tests:
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Install (`pip install three-stars`) | ~2-6 sec | |
-| Init (`sss init my-app`) | <1 sec | Project scaffold |
-| First deploy (`sss deploy`) | ~5 min | All AWS resources created |
-| Redeploy (`sss deploy`) | **~23 sec** | Cached deps, incremental update |
-| Status (`sss status`) | <1 sec | |
-| Destroy (`sss destroy`) | ~2 min | Full resource cleanup |
-
-The **~23 second redeploy** is the key iteration metric — change your agent code or frontend, run `sss deploy`, and see results in under 30 seconds.
-
-## Agent Features
-
-The starter agent template includes:
-
-### Strands Agent with SSE Streaming
-
-The agent uses [Strands Agents](https://github.com/strands-agents/strands-agents-python) with Amazon Bedrock and streams responses as Server-Sent Events. The frontend displays token-by-token output in real time, renders responses as Markdown (headings, code blocks, lists, tables), and shows tool call progress indicators when the agent uses MCP tools.
-
-### MCP Tool Support
-
-Agents can use [MCP](https://modelcontextprotocol.io/) tools by placing an `mcp.json` file in the `agent/` directory:
-
-```json
-{
-  "mcpServers": {
-    "my-server": {
-      "command": "uvx",
-      "args": ["my-mcp-server"]
-    }
-  }
-}
-```
-
-Both transport types are supported:
-
-- **stdio** — spawns a subprocess (`command` + `args`)
-- **HTTP** — connects to a remote URL (`url` + optional `headers`)
-
-Environment variable references (`${VAR}`) are resolved automatically. AWS credentials from the runtime are forwarded to stdio subprocesses.
-
-### Conversation Memory
-
-When AgentCore Memory is configured, conversation history is preserved across turns within a session. The frontend sends a `session_id` with each request so the agent remembers prior context.
-
-## MCP Server
-
-three-stars includes an [MCP](https://modelcontextprotocol.io/) server so AI agents (Claude Desktop, Claude Code, etc.) can deploy and manage apps programmatically.
-
-### Claude Code
-
-Add to your Claude Code MCP settings:
-
-```json
-{
-  "mcpServers": {
-    "three-stars": {
-      "command": "uvx",
-      "args": ["three-stars-mcp"]
-    }
-  }
-}
-```
-
-For local development:
+To use the MCP server from a local checkout, point to the source directory:
 
 ```json
 {
@@ -252,23 +234,6 @@ For local development:
   }
 }
 ```
-
-### Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `sss_init` | Create a new three-stars project with config, frontend, and agent templates |
-| `sss_deploy` | Deploy the project to AWS (S3, AgentCore, Lambda@Edge, CloudFront) |
-| `sss_status` | Show deployment status of AWS resources |
-| `sss_destroy` | Destroy all deployed AWS resources |
-
-## Prerequisites
-
-- Python 3.12+
-- AWS credentials configured (`aws configure`)
-- Permissions for S3, CloudFront, IAM, Lambda, and Bedrock AgentCore
-
-## Development
 
 ```bash
 # Install in development mode
