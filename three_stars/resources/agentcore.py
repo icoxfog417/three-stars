@@ -8,6 +8,7 @@ bedrock-agentcore SDK's MemoryClient.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -57,12 +58,20 @@ def deploy(
     agent_key = f"agents/{config.name}/agent.zip"
     _package_and_upload(ctx, agent_path, names.agent_name, bucket_name, agent_key)
 
-    # Create or reuse AgentCore Memory resource
+    # Create or reuse AgentCore Memory resource.
+    # The SDK logs at ERROR level when the memory already exists (before the
+    # create_or_get_memory fallback kicks in).  Suppress that expected noise.
     memory_client = MemoryClient(region_name=config.region)
-    memory_info = memory_client.create_or_get_memory(
-        name=names.memory,
-        description=f"Conversation memory for {config.name}",
-    )
+    _memory_logger = logging.getLogger("bedrock_agentcore.memory")
+    _prev_level = _memory_logger.level
+    _memory_logger.setLevel(logging.CRITICAL)
+    try:
+        memory_info = memory_client.create_or_get_memory(
+            name=names.memory,
+            description=f"Conversation memory for {config.name}",
+        )
+    finally:
+        _memory_logger.setLevel(_prev_level)
     memory_id = memory_info["id"]
     memory_name = memory_info.get("name", names.memory)
 

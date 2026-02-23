@@ -46,6 +46,20 @@ sss init my-test-app
 - [ ] "Next steps" guidance is printed
 - [ ] Model ID in config is a valid Bedrock model ID
 
+### Phase 1b: MCP Tool Verification (offline)
+
+Verify all four MCP tools are discoverable and functional without deploying:
+
+1. Use `ToolSearch` to load each tool: `sss_init`, `sss_deploy`, `sss_status`, `sss_destroy`
+2. Call `sss_init` via MCP to scaffold a project — verify output matches CLI
+3. Call `sss_status` via MCP on fresh project — verify "No deployment found"
+4. Verify `sss_deploy` and `sss_destroy` schemas load correctly (skip live invocation)
+
+**Check:**
+- [ ] All 4 tools load via ToolSearch without errors
+- [ ] `sss_init` MCP call produces same output as CLI `sss init`
+- [ ] `sss_status` MCP call returns correct message for fresh project
+
 ### Phase 2: Deploy — 1st WoW (First Deployment)
 
 ```bash
@@ -57,6 +71,7 @@ time sss deploy -y -v
 - [ ] Progress output shows step numbers `[1/5]` through `[5/5]`
 - [ ] Each step completes with green status
 - [ ] Health check table prints with all resources showing Active/Ready/Deployed
+- [ ] Memory resource appears in health check (Active status)
 - [ ] "Deployed successfully!" message with a URL is printed
 - [ ] Recovery commands are shown
 - [ ] `curl <URL>` returns 200 with the frontend HTML
@@ -65,6 +80,31 @@ time sss deploy -y -v
 **Record:** Total deploy time, any warnings, any confusing output.
 
 **PAUSE — User Browser Test**: After completing automated checks, use `AskUserQuestion` to show the deployed frontend URL and ask the user to test it in their browser. Present the URL clearly and ask them to confirm the frontend loads and the chat works. Wait for user confirmation before proceeding to Phase 3.
+
+### Phase 2b: Conversation Memory Test
+
+After first deploy, verify that AgentCore Memory preserves conversation history within a session. Generate a single `session_id` and send two sequential messages:
+
+```bash
+SESSION_ID=$(uuidgen)
+
+# Message 1: Tell the agent something memorable
+curl -s -X POST <URL>/api/invoke \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"My name is Alice and I like strawberries.\", \"session_id\":\"$SESSION_ID\"}"
+
+# Message 2: Ask the agent to recall it
+curl -s -X POST <URL>/api/invoke \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"What is my name and what do I like?\", \"session_id\":\"$SESSION_ID\"}"
+```
+
+**Check:**
+- [ ] Message 2 response contains "Alice" — proves conversation history was retrieved
+- [ ] Message 2 response contains "strawberries" — proves context persisted
+- [ ] Using a *different* session_id does NOT recall the conversation (session isolation)
+
+**Record:** Whether memory worked on first try, any latency between messages needed.
 
 ### Phase 3: Update & Redeploy — 2nd WoW (Fast Iteration)
 
@@ -92,7 +132,7 @@ sss status
 ```
 
 **Check:**
-- [ ] Status table shows all resources
+- [ ] Status table shows all resources including Memory
 - [ ] URL is printed
 - [ ] No error warnings
 
@@ -179,6 +219,33 @@ After completing all phases, write a DX report to `.sandbox/test-dx/DX_REPORT.md
 | P0 | ... | ... |
 | P1 | ... | ... |
 | P2 | ... | ... |
+
+## Conversation Memory (AgentCore Memory)
+
+**Rating**: X/10
+
+**Memory recall test:**
+- Told agent: "My name is Alice and I like strawberries"
+- Asked: "What is my name and what do I like?"
+- Agent recalled correctly: YES/NO
+- Session isolation verified: YES/NO
+
+**Positives:**
+- ...
+
+**Issues:**
+- ...
+
+## MCP Tools
+
+**Rating**: X/10
+
+| Tool | Discoverable | Callable | Output Correct |
+|------|-------------|----------|----------------|
+| sss_init | YES/NO | YES/NO | YES/NO |
+| sss_status | YES/NO | YES/NO | YES/NO |
+| sss_deploy | YES/NO | schema loaded | — |
+| sss_destroy | YES/NO | schema loaded | — |
 
 ## User Browser Test Feedback
 
