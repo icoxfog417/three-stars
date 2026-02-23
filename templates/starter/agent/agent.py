@@ -37,8 +37,15 @@ def _resolve_env_refs(value: str) -> str:
 def _load_mcp_clients() -> list:
     """Load MCP tool clients from agent/mcp.json if it exists.
 
-    Each server entry becomes an MCPClient with env-var resolution and
-    automatic AWS credential forwarding.
+    Each server entry becomes an MCPClient. Supports two transport types:
+
+    - **stdio** (has ``command``): spawns a subprocess via ``stdio_client``
+    - **http** (has ``url``): connects via ``streamablehttp_client``
+
+    Environment variable references (``${VAR}``) in ``env``, ``args``,
+    ``command``, and ``url`` fields are resolved from ``os.environ``.
+    AWS credentials from the current boto3 session are forwarded to
+    stdio subprocesses automatically.
     """
     mcp_path = Path(__file__).parent / "mcp.json"
     if not mcp_path.exists():
@@ -53,7 +60,7 @@ def _load_mcp_clients() -> list:
 
     from strands.tools.mcp import MCPClient
 
-    # Build AWS credential env from the current boto3 session
+    # Build AWS credential env from the current boto3 session (for stdio)
     import boto3
 
     session = boto3.Session()
@@ -70,17 +77,43 @@ def _load_mcp_clients() -> list:
 
     clients: list[MCPClient] = []
     for _name, server in servers.items():
-        command = _resolve_env_refs(server["command"])
-        args = [_resolve_env_refs(a) for a in server.get("args", [])]
-
-        # Merge AWS creds → user env (resolved) → pass to subprocess
-        env = {**aws_env}
-        for k, v in server.get("env", {}).items():
-            env[k] = _resolve_env_refs(v)
-
-        clients.append(MCPClient(command=command, args=args, env=env))
+        if "command" in server:
+            client = _make_stdio_client(MCPClient, server, aws_env)
+        elif "url" in server:
+            client = _make_http_client(MCPClient, server)
+        else:
+            continue
+        clients.append(client)
 
     return clients
+
+
+def _make_stdio_client(MCPClient, server: dict, aws_env: dict[str, str]):
+    """Create an MCPClient for a stdio (command-based) MCP server."""
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    command = _resolve_env_refs(server["command"])
+    args = [_resolve_env_refs(a) for a in server.get("args", [])]
+
+    env = {**aws_env}
+    for k, v in server.get("env", {}).items():
+        env[k] = _resolve_env_refs(v)
+
+    return MCPClient(
+        lambda: stdio_client(StdioServerParameters(command=command, args=args, env=env))
+    )
+
+
+def _make_http_client(MCPClient, server: dict):
+    """Create an MCPClient for an HTTP (url-based) MCP server."""
+    from mcp.client.streamable_http import streamablehttp_client
+
+    url = _resolve_env_refs(server["url"])
+    headers: dict[str, str] = {}
+    for k, v in server.get("headers", {}).items():
+        headers[k] = _resolve_env_refs(v)
+
+    return MCPClient(lambda: streamablehttp_client(url=url, headers=headers or None))
 
 
 def _build_session_manager(session_id: str, actor_id: str):
