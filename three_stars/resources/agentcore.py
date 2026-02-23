@@ -407,6 +407,12 @@ def _create_iam_role(
                     f"arn:aws:bedrock-agentcore:*:{account_id}:workload-identity-directory/default/workload-identity/*",
                 ],
             },
+            # AWS MCP — required for mcp-proxy-for-aws tool access
+            {
+                "Effect": "Allow",
+                "Action": "aws-mcp:InvokeMcp",
+                "Resource": "*",
+            },
         ],
     }
 
