@@ -72,8 +72,3 @@ select = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-
-[tool.uv.workspace]
-members = [
-    ".sandbox/test-dx",
-]

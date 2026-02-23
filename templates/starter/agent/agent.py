@@ -64,6 +64,34 @@ async def handler(payload):
         # Skip the final result event (contains non-serializable AgentResult)
         if "result" in event:
             continue
+
+        # Tool call started — emit tool name
+        if "current_tool_use" in event:
+            tool_info = event["current_tool_use"]
+            if (
+                tool_info.get("name")
+                and event.get("type") == "tool_use_stream"
+                and not tool_info.get("input")
+            ):
+                yield {
+                    "tool_use": {
+                        "name": tool_info["name"],
+                        "id": tool_info.get("toolUseId", ""),
+                    }
+                }
+            continue
+
+        # Tool result — emit status
+        if event.get("type") == "tool_result":
+            tr = event.get("tool_result", {})
+            yield {
+                "tool_result": {
+                    "status": tr.get("status", "success"),
+                    "id": tr.get("toolUseId", ""),
+                }
+            }
+            continue
+
         # Extract text delta from streaming chunks
         text = event.get("data") or (event.get("delta") or {}).get("text") or ""
         if text:
