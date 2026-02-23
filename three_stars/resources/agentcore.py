@@ -315,6 +315,7 @@ def _create_iam_role(
         "Version": "2012-10-17",
         "Statement": [
             {
+                "Sid": "BedrockModelInvocation",
                 "Effect": "Allow",
                 "Action": [
                     "bedrock:InvokeModel",
@@ -342,6 +343,69 @@ def _create_iam_role(
                     "bedrock-agentcore:RetrieveMemories",
                 ],
                 "Resource": f"arn:aws:bedrock-agentcore:*:{account_id}:memory/*",
+            },
+            # CloudWatch Logs — required for AgentCore runtime observability
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:DescribeLogStreams",
+                ],
+                "Resource": (
+                    f"arn:aws:logs:*:{account_id}"
+                    ":log-group:/aws/bedrock-agentcore/runtimes/*"
+                ),
+            },
+            {
+                "Effect": "Allow",
+                "Action": "logs:DescribeLogGroups",
+                "Resource": f"arn:aws:logs:*:{account_id}:log-group:*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                ],
+                "Resource": (
+                    f"arn:aws:logs:*:{account_id}"
+                    ":log-group:/aws/bedrock-agentcore/runtimes/*"
+                    ":log-stream:*"
+                ),
+            },
+            # X-Ray tracing
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "xray:GetSamplingRules",
+                    "xray:GetSamplingTargets",
+                ],
+                "Resource": "*",
+            },
+            # CloudWatch Metrics
+            {
+                "Effect": "Allow",
+                "Action": "cloudwatch:PutMetricData",
+                "Resource": "*",
+                "Condition": {
+                    "StringEquals": {"cloudwatch:namespace": "bedrock-agentcore"}
+                },
+            },
+            # Workload Identity
+            {
+                "Sid": "GetAgentAccessToken",
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock-agentcore:GetWorkloadAccessToken",
+                    "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                    "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+                ],
+                "Resource": [
+                    f"arn:aws:bedrock-agentcore:*:{account_id}:workload-identity-directory/default",
+                    f"arn:aws:bedrock-agentcore:*:{account_id}:workload-identity-directory/default/workload-identity/*",
+                ],
             },
         ],
     }

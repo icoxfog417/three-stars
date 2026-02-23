@@ -61,11 +61,12 @@ def get_tools() -> list:
         aws_env["AWS_DEFAULT_REGION"] = os.environ["AWS_DEFAULT_REGION"]
 
     clients: list[MCPClient] = []
-    for _name, server in servers.items():
+    for name, server in servers.items():
+        prefix = f"mcp__{name}__"
         if "command" in server:
-            client = _make_stdio_client(MCPClient, server, aws_env)
+            client = _make_stdio_client(MCPClient, server, aws_env, prefix=prefix)
         elif "url" in server:
-            client = _make_http_client(MCPClient, server)
+            client = _make_http_client(MCPClient, server, prefix=prefix)
         else:
             continue
         clients.append(client)
@@ -97,7 +98,7 @@ def _resolve_command_path(command: str) -> str:
     return command
 
 
-def _make_stdio_client(MCPClient, server: dict, aws_env: dict[str, str]):
+def _make_stdio_client(MCPClient, server: dict, aws_env: dict[str, str], *, prefix: str):
     """Create an MCPClient for a stdio (command-based) MCP server."""
     from mcp.client.stdio import StdioServerParameters, stdio_client
 
@@ -109,11 +110,12 @@ def _make_stdio_client(MCPClient, server: dict, aws_env: dict[str, str]):
         env[k] = _resolve_env_refs(v)
 
     return MCPClient(
-        lambda: stdio_client(StdioServerParameters(command=command, args=args, env=env))
+        lambda: stdio_client(StdioServerParameters(command=command, args=args, env=env)),
+        prefix=prefix,
     )
 
 
-def _make_http_client(MCPClient, server: dict):
+def _make_http_client(MCPClient, server: dict, *, prefix: str):
     """Create an MCPClient for an HTTP (url-based) MCP server."""
     from mcp.client.streamable_http import streamablehttp_client
 
@@ -122,4 +124,7 @@ def _make_http_client(MCPClient, server: dict):
     for k, v in server.get("headers", {}).items():
         headers[k] = _resolve_env_refs(v)
 
-    return MCPClient(lambda: streamablehttp_client(url=url, headers=headers or None))
+    return MCPClient(
+        lambda: streamablehttp_client(url=url, headers=headers or None),
+        prefix=prefix,
+    )
