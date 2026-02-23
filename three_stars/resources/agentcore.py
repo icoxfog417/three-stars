@@ -93,7 +93,7 @@ def deploy(
             code_s3_bucket=bucket_name,
             code_s3_key=agent_key,
             runtime_type=_RUNTIME_VERSION,
-            entrypoint_array=["agent.py"],
+            entrypoint_array=["opentelemetry-instrument", "agent.py"],
             network_config={"networkMode": "PUBLIC"},
             env_vars=env_vars,
             auto_update_on_conflict=True,

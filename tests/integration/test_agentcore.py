@@ -45,7 +45,7 @@ def agent_dir(tmp_path_factory):
         'if __name__ == "__main__":\n'
         "    app.run()\n"
     )
-    (agent / "requirements.txt").write_text("bedrock-agentcore\n")
+    (agent / "requirements.txt").write_text("bedrock-agentcore\naws-opentelemetry-distro\n")
     return d
 
 

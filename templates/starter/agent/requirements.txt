@@ -1,3 +1,4 @@
 strands-agents[mcp]
 bedrock-agentcore
+aws-opentelemetry-distro
 uv

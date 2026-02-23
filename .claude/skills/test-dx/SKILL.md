@@ -12,30 +12,28 @@ Test the three-stars developer experience end-to-end: $ARGUMENTS
 
 You are a **developer experience evaluator**. Your job is to walk through the full three-stars lifecycle as a new developer would, recording timings, output quality, errors, and surprises. Work entirely inside the project's `.sandbox/test-dx/` directory.
 
-**IMPORTANT**: The project root is the directory containing this skill file's parent `.claude/` directory. All `.sandbox/` paths are relative to the project root. Install three-stars from the project root using `uv pip install -e <project-root>`.
+**IMPORTANT**: The project root is the directory containing this skill file's parent `.claude/` directory. All `.sandbox/` paths are relative to the project root. Install three-stars from the project root using `uv pip install -e <project-root>`. The Bash tool does NOT preserve `cd` across separate calls — always use absolute paths or chain commands with `&&` in a single Bash call. Use ONE app (`my-test-app`) for the entire test.
 
 ## Test Procedure
 
 ### Phase 0: Setup
 
+Define absolute paths up front and use them in every Bash call:
+
 ```bash
-cd <project-root>
-mkdir -p .sandbox/test-dx
-cd .sandbox/test-dx
-uv init
-uv venv && uv pip install -e <project-root>
+PROJECT_ROOT=<absolute-project-root>
+SANDBOX=$PROJECT_ROOT/.sandbox/test-dx
+mkdir -p $SANDBOX && cd $SANDBOX && uv init && uv venv && uv pip install -e $PROJECT_ROOT
 ```
 
 Verify:
-- `sss --help` prints usage
-- `sss --version` prints a version number
+- `cd $SANDBOX && source .venv/bin/activate && sss --help` prints usage
+- `cd $SANDBOX && source .venv/bin/activate && sss --version` prints a version number
 
 ### Phase 1: Init (Scaffold)
 
 ```bash
-cd .sandbox/test-dx
-source .venv/bin/activate
-sss init my-test-app
+cd $SANDBOX && source .venv/bin/activate && sss init my-test-app
 ```
 
 **Check:**
@@ -46,25 +44,10 @@ sss init my-test-app
 - [ ] "Next steps" guidance is printed
 - [ ] Model ID in config is a valid Bedrock model ID
 
-### Phase 1b: MCP Tool Verification (offline)
-
-Verify all four MCP tools are discoverable and functional without deploying:
-
-1. Use `ToolSearch` to load each tool: `sss_init`, `sss_deploy`, `sss_status`, `sss_destroy`
-2. Call `sss_init` via MCP to scaffold a project — verify output matches CLI
-3. Call `sss_status` via MCP on fresh project — verify "No deployment found"
-4. Verify `sss_deploy` and `sss_destroy` schemas load correctly (skip live invocation)
-
-**Check:**
-- [ ] All 4 tools load via ToolSearch without errors
-- [ ] `sss_init` MCP call produces same output as CLI `sss init`
-- [ ] `sss_status` MCP call returns correct message for fresh project
-
 ### Phase 2: Deploy — 1st WoW (First Deployment)
 
 ```bash
-cd my-test-app
-time sss deploy -y -v
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && time sss deploy -y -v
 ```
 
 **Check:**
@@ -79,7 +62,20 @@ time sss deploy -y -v
 
 **Record:** Total deploy time, any warnings, any confusing output.
 
-**PAUSE — User Browser Test**: After completing automated checks, use `AskUserQuestion` to show the deployed frontend URL and ask the user to test it in their browser. Present the URL clearly and ask them to confirm the frontend loads and the chat works. Wait for user confirmation before proceeding to Phase 3.
+**PAUSE — User Browser Test**: After completing automated checks, use `AskUserQuestion` to show the deployed frontend URL and ask the user to test it in their browser. Present the URL clearly and ask them to confirm the frontend loads and the chat works. Wait for user confirmation before proceeding.
+
+### Phase 2a: MCP Tool Verification (online)
+
+After a successful deploy, verify that the deployed agent can discover and invoke MCP tools. The agent's `.mcp.json` is deployed alongside the agent code, so tools should be auto-loaded at runtime.
+
+1. Invoke the agent via the API with a prompt that requires MCP tool use (e.g. ask it to use one of its configured tools)
+2. Check CloudWatch logs for the agent's Lambda function for evidence of MCP tool loading/invocation
+
+**Check:**
+- [ ] Agent responds successfully when prompted to use an MCP tool
+- [ ] CloudWatch logs show MCP tool discovery or invocation entries
+
+**Record:** Whether MCP tools loaded automatically, any errors in logs.
 
 ### Phase 2b: Conversation Memory Test
 
@@ -108,10 +104,10 @@ curl -s -X POST <URL>/api/invoke \
 
 ### Phase 3: Update & Redeploy — 2nd WoW (Fast Iteration)
 
-Make a visible change to the frontend (e.g., update `<h1>` text), then:
+Make a visible change to the frontend (e.g., update `<h1>` text in `$APP_DIR/app/index.html`), then:
 
 ```bash
-time sss deploy -y -v
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && time sss deploy -y -v
 ```
 
 **Check:**
@@ -128,7 +124,7 @@ time sss deploy -y -v
 ### Phase 4: Status Check
 
 ```bash
-sss status
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && sss status
 ```
 
 **Check:**
@@ -139,7 +135,7 @@ sss status
 ### Phase 5: Destroy — Clean Teardown
 
 ```bash
-sss destroy --yes
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && sss destroy --yes
 ```
 
 **Check:**
@@ -157,7 +153,7 @@ sss destroy --yes
 ### Phase 6: Cleanup
 
 ```bash
-rm -rf .sandbox/test-dx/my-test-app
+rm -rf $APP_DIR
 ```
 
 ## Report Format
@@ -236,16 +232,19 @@ After completing all phases, write a DX report to `.sandbox/test-dx/DX_REPORT.md
 **Issues:**
 - ...
 
-## MCP Tools
+## MCP Tools (Online Verification)
 
 **Rating**: X/10
 
-| Tool | Discoverable | Callable | Output Correct |
-|------|-------------|----------|----------------|
-| sss_init | YES/NO | YES/NO | YES/NO |
-| sss_status | YES/NO | YES/NO | YES/NO |
-| sss_deploy | YES/NO | schema loaded | — |
-| sss_destroy | YES/NO | schema loaded | — |
+- Agent auto-loaded MCP tools after deploy: YES/NO
+- Agent responded to MCP tool prompt: YES/NO
+- CloudWatch logs confirm tool discovery: YES/NO
+
+**Positives:**
+- ...
+
+**Issues:**
+- ...
 
 ## User Browser Test Feedback
 
