@@ -9,8 +9,8 @@ import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
+from tests.conftest import make_test_names
 from three_stars.config import ProjectConfig
-from three_stars.naming import ResourceNames
 from three_stars.resources import cdn
 from three_stars.resources._base import AWSContext
 from three_stars.resources.cdn import (
@@ -20,24 +20,11 @@ from three_stars.resources.cdn import (
 )
 from three_stars.state import CdnState
 
+NAMES = make_test_names()
+
 
 def _make_ctx(region="us-east-1"):
     return AWSContext(boto3.Session(region_name=region))
-
-
-def _make_names():
-    return ResourceNames(
-        prefix="sss-test",
-        bucket="sss-test-abc12345",
-        agentcore_role="sss-test-role",
-        agent_name="sss_test_agent",
-        endpoint_name="sss_test_endpoint",
-        lambda_role="sss-test-lambda-role",
-        lambda_function="sss-test-api-bridge",
-        edge_role="sss-test-edge-role",
-        edge_function="sss-test-edge-sha256",
-        memory="sss_test_memory",
-    )
 
 
 def _make_config(tmp_path):
@@ -137,23 +124,23 @@ class TestDistribution:
 class TestCdnContract:
     """Contract tests for deploy/destroy/get_status."""
 
-    def _setup_s3_bucket(self, ctx, bucket_name="sss-test-abc12345"):
+    def _setup_s3_bucket(self, ctx):
         s3 = ctx.client("s3")
-        s3.create_bucket(Bucket=bucket_name)
-        return bucket_name
+        s3.create_bucket(Bucket=NAMES.bucket)
+        return NAMES.bucket
 
     @patch("three_stars.resources.storage.set_bucket_policy_for_cloudfront")
     def test_deploy_returns_state(self, mock_policy, tmp_path):
         ctx = _make_ctx()
         self._setup_s3_bucket(ctx)
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = cdn.deploy(
             ctx,
             config,
             names,
-            bucket_name="sss-test-abc12345",
+            bucket_name=names.bucket,
             agentcore_region="us-east-1",
             edge_function_arn="arn:aws:lambda:us-east-1:123:function/edge:1",
         )
@@ -169,13 +156,13 @@ class TestCdnContract:
         ctx = _make_ctx()
         self._setup_s3_bucket(ctx)
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = cdn.deploy(
             ctx,
             config,
             names,
-            bucket_name="sss-test-abc12345",
+            bucket_name=names.bucket,
             agentcore_region="us-east-1",
             edge_function_arn="arn:aws:lambda:us-east-1:123:function/edge:1",
         )
@@ -185,7 +172,7 @@ class TestCdnContract:
             ctx,
             config,
             names,
-            bucket_name="sss-test-abc12345",
+            bucket_name=names.bucket,
             agentcore_region="us-east-1",
             edge_function_arn="arn:aws:lambda:us-east-1:123:function/edge:1",
             existing=state,
@@ -198,13 +185,13 @@ class TestCdnContract:
         ctx = _make_ctx()
         self._setup_s3_bucket(ctx)
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = cdn.deploy(
             ctx,
             config,
             names,
-            bucket_name="sss-test-abc12345",
+            bucket_name=names.bucket,
             agentcore_region="us-east-1",
             edge_function_arn="arn:aws:lambda:us-east-1:123:function/edge:1",
         )

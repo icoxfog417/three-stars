@@ -7,6 +7,21 @@ import os
 import pytest
 import yaml
 
+from three_stars.config import ProjectConfig
+from three_stars.naming import ResourceNames, compute_names
+
+TEST_ACCOUNT_ID = "123456789012"
+
+
+def make_test_names(project_name: str = "test") -> ResourceNames:
+    """Build ResourceNames via compute_names for test use.
+
+    Call with a project name to get correctly-derived resource names
+    instead of hardcoding them in each test file.
+    """
+    config = ProjectConfig(name=project_name, region="us-east-1")
+    return compute_names(config, TEST_ACCOUNT_ID)
+
 
 @pytest.fixture(autouse=True)
 def _aws_credentials():

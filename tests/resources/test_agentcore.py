@@ -13,25 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ClientError
 
+from tests.conftest import make_test_names
 from three_stars.config import AgentConfig, ProjectConfig
-from three_stars.naming import ResourceNames
 from three_stars.resources import agentcore
 from three_stars.state import AgentCoreState
 
-
-def _make_names() -> ResourceNames:
-    return ResourceNames(
-        prefix="sss-test",
-        bucket="sss-test-abc12345",
-        agentcore_role="sss-test-role",
-        agent_name="sss_test_agent",
-        endpoint_name="sss_test_endpoint",
-        lambda_role="sss-test-lambda-role",
-        lambda_function="sss-test-api-bridge",
-        edge_role="sss-test-edge-role",
-        edge_function="sss-test-edge-sha256",
-        memory="sss_test_memory",
-    )
+NAMES = make_test_names()
 
 
 def _make_config(tmp_path: Path) -> ProjectConfig:
@@ -52,14 +39,14 @@ def _make_config(tmp_path: Path) -> ProjectConfig:
 
 def _make_existing_state() -> AgentCoreState:
     return AgentCoreState(
-        iam_role_name="sss-test-role",
-        iam_role_arn="arn:aws:iam::123456789012:role/sss-test-role",
+        iam_role_name=NAMES.agentcore_role,
+        iam_role_arn=f"arn:aws:iam::123456789012:role/{NAMES.agentcore_role}",
         runtime_id="rt-existing",
         runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/rt-existing",
         endpoint_name="DEFAULT",
         endpoint_arn="arn:aws:bedrock-agentcore:us-east-1:123456789012:endpoint/ep-existing",
         memory_id="mem-123",
-        memory_name="sss_test_memory",
+        memory_name=NAMES.memory,
     )
 
 
@@ -88,12 +75,12 @@ class TestDeployReturnsState:
         ctx = MagicMock()
         ctx.account_id = "123456789012"
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
-        mock_iam.return_value = "arn:aws:iam::123456789012:role/sss-test-role"
+        mock_iam.return_value = f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
         mock_mem_cls.return_value.create_or_get_memory.return_value = {
             "id": "mem-456",
-            "name": "sss_test_memory",
+            "name": names.memory,
         }
         mock_retry.return_value = {
             "id": "rt-789",
@@ -107,8 +94,8 @@ class TestDeployReturnsState:
         state = agentcore.deploy(ctx, config, names, bucket_name="test-bucket")
 
         assert isinstance(state, AgentCoreState)
-        assert state.iam_role_name == "sss-test-role"
-        assert state.iam_role_arn == "arn:aws:iam::123456789012:role/sss-test-role"
+        assert state.iam_role_name == names.agentcore_role
+        assert state.iam_role_arn == f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
         assert state.runtime_id == "rt-789"
         assert state.runtime_arn.startswith("arn:")
         assert state.endpoint_name == "DEFAULT"
@@ -130,13 +117,13 @@ class TestDeployUpdateIdempotent:
         ctx = MagicMock()
         ctx.account_id = "123456789012"
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
         existing = _make_existing_state()
 
-        mock_iam.return_value = "arn:aws:iam::123456789012:role/sss-test-role"
+        mock_iam.return_value = f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
         mock_mem_cls.return_value.create_or_get_memory.return_value = {
             "id": "mem-123",
-            "name": "sss_test_memory",
+            "name": names.memory,
         }
         mock_retry.return_value = {
             "id": "rt-existing",
@@ -163,7 +150,7 @@ class TestDeployErrorHandling:
         ctx = MagicMock()
         ctx.account_id = "123456789012"
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         mock_iam.side_effect = ClientError(
             {"Error": {"Code": "AccessDenied", "Message": "Not authorized"}},
@@ -185,12 +172,12 @@ class TestDeployErrorHandling:
         ctx = MagicMock()
         ctx.account_id = "123456789012"
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
-        mock_iam.return_value = "arn:aws:iam::123456789012:role/sss-test-role"
+        mock_iam.return_value = f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
         mock_mem_cls.return_value.create_or_get_memory.return_value = {
             "id": "mem-456",
-            "name": "sss_test_memory",
+            "name": names.memory,
         }
         mock_retry.return_value = {
             "id": "rt-789",
@@ -227,7 +214,7 @@ class TestDestroyCleanup:
         # Verify runtime was deleted
         control_client.delete_agent_runtime.assert_called_once_with(agentRuntimeId="rt-existing")
         # Verify IAM role was deleted
-        mock_del_role.assert_called_once_with(ctx, "sss-test-role")
+        mock_del_role.assert_called_once_with(ctx, NAMES.agentcore_role)
 
 
 class TestDestroyIdempotent:

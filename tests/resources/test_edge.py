@@ -9,28 +9,14 @@ import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
-from three_stars.naming import ResourceNames
+from tests.conftest import make_test_names
 from three_stars.resources import ResourceStatus, edge
 from three_stars.resources._base import AWSContext
 from three_stars.state import EdgeState
 
+NAMES = make_test_names()
 RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime"
 REGION = "us-east-1"
-
-
-def _make_names() -> ResourceNames:
-    return ResourceNames(
-        prefix="sss-test",
-        bucket="sss-test-abc12345",
-        agentcore_role="sss-test-role",
-        agent_name="sss_test_agent",
-        endpoint_name="sss_test_endpoint",
-        lambda_role="sss-test-lambda-role",
-        lambda_function="sss-test-api-bridge",
-        edge_role="sss-test-edge-role",
-        edge_function="sss-test-edge-sha256",
-        memory="sss_test_memory",
-    )
 
 
 def _make_ctx() -> AWSContext:
@@ -48,7 +34,7 @@ class TestEdge:
     def test_deploy_returns_state(self, _sleep):
         """deploy() creates IAM role + Lambda function and returns EdgeState."""
         ctx = _make_ctx()
-        names = _make_names()
+        names = NAMES
 
         state = edge.deploy(ctx, names, runtime_arn=RUNTIME_ARN, region=REGION)
 
@@ -73,7 +59,7 @@ class TestEdge:
     def test_deploy_update_idempotent(self, _sleep):
         """Passing existing= skips creation and returns the same state."""
         ctx = _make_ctx()
-        names = _make_names()
+        names = NAMES
 
         # First deploy to create resources
         state = edge.deploy(ctx, names, runtime_arn=RUNTIME_ARN, region=REGION)
@@ -93,7 +79,7 @@ class TestEdge:
     def test_deploy_error_handling(self, _sleep):
         """IAM permission errors surface as ClientError."""
         ctx = _make_ctx()
-        names = _make_names()
+        names = NAMES
 
         error = ClientError(
             {
@@ -116,7 +102,7 @@ class TestEdge:
     def test_destroy_cleans_up(self, _sleep):
         """destroy() deletes function and role."""
         ctx = _make_ctx()
-        names = _make_names()
+        names = NAMES
 
         state = edge.deploy(ctx, names, runtime_arn=RUNTIME_ARN, region=REGION)
 
@@ -138,7 +124,7 @@ class TestEdge:
     def test_destroy_idempotent(self, _sleep):
         """Destroying already-deleted resources is a no-op (returns True)."""
         ctx = _make_ctx()
-        names = _make_names()
+        names = NAMES
 
         state = edge.deploy(ctx, names, runtime_arn=RUNTIME_ARN, region=REGION)
 
@@ -155,7 +141,7 @@ class TestEdge:
     def test_get_status(self, _sleep):
         """get_status returns Active for existing function, Not Found for deleted."""
         ctx = _make_ctx()
-        names = _make_names()
+        names = NAMES
 
         state = edge.deploy(ctx, names, runtime_arn=RUNTIME_ARN, region=REGION)
 

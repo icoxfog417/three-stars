@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from three_stars.config import ProjectConfig
-from three_stars.naming import ResourceNames
 from three_stars.state import (
     AgentCoreState,
     CdnState,
@@ -40,18 +39,9 @@ def config(tmp_path):
 
 @pytest.fixture
 def names():
-    return ResourceNames(
-        prefix="sss-test-app",
-        bucket="sss-test-app-abcd1234",
-        agentcore_role="sss-test-app-role",
-        agent_name="sss_test_app_agent",
-        endpoint_name="sss_test_app_endpoint",
-        lambda_role="sss-test-app-lambda-role",
-        lambda_function="sss-test-app-api-bridge",
-        edge_role="sss-test-app-edge-role",
-        edge_function="sss-test-app-edge-sha256",
-        memory="sss_test_app_memory",
-    )
+    from tests.conftest import make_test_names
+
+    return make_test_names("test-app")
 
 
 # ---------------------------------------------------------------------------

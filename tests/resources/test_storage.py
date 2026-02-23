@@ -7,8 +7,8 @@ import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
 
+from tests.conftest import make_test_names
 from three_stars.config import AppConfig, ProjectConfig
-from three_stars.naming import ResourceNames
 from three_stars.resources import storage
 from three_stars.resources._base import AWSContext
 from three_stars.resources.storage import (
@@ -18,24 +18,11 @@ from three_stars.resources.storage import (
 )
 from three_stars.state import StorageState
 
+NAMES = make_test_names()
+
 
 def _make_ctx(region="us-east-1"):
     return AWSContext(boto3.Session(region_name=region))
-
-
-def _make_names():
-    return ResourceNames(
-        prefix="sss-test",
-        bucket="sss-test-abc12345",
-        agentcore_role="sss-test-role",
-        agent_name="sss_test_agent",
-        endpoint_name="sss_test_endpoint",
-        lambda_role="sss-test-lambda-role",
-        lambda_function="sss-test-api-bridge",
-        edge_role="sss-test-edge-role",
-        edge_function="sss-test-edge-sha256",
-        memory="sss_test_memory",
-    )
 
 
 def _make_config(tmp_path):
@@ -132,12 +119,12 @@ class TestStorageContract:
     def test_deploy_returns_state(self, tmp_path):
         ctx = _make_ctx()
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = storage.deploy(ctx, config, names)
 
         assert isinstance(state, StorageState)
-        assert state.s3_bucket == "sss-test-abc12345"
+        assert state.s3_bucket == names.bucket
         # Verify bucket exists
         s3 = ctx.client("s3")
         resp = s3.head_bucket(Bucket=state.s3_bucket)
@@ -146,7 +133,7 @@ class TestStorageContract:
     def test_deploy_update_idempotent(self, tmp_path):
         ctx = _make_ctx()
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state1 = storage.deploy(ctx, config, names)
         state2 = storage.deploy(ctx, config, names)
@@ -156,7 +143,7 @@ class TestStorageContract:
     def test_destroy_cleans_up(self, tmp_path):
         ctx = _make_ctx()
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = storage.deploy(ctx, config, names)
         storage.destroy(ctx, state)
@@ -168,7 +155,7 @@ class TestStorageContract:
     def test_destroy_idempotent(self, tmp_path):
         ctx = _make_ctx()
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = storage.deploy(ctx, config, names)
         storage.destroy(ctx, state)
@@ -178,7 +165,7 @@ class TestStorageContract:
     def test_get_status(self, tmp_path):
         ctx = _make_ctx()
         config = _make_config(tmp_path)
-        names = _make_names()
+        names = NAMES
 
         state = storage.deploy(ctx, config, names)
         rows = storage.get_status(ctx, state)

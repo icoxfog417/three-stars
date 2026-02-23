@@ -6,7 +6,7 @@ Manage test structure and implement missing tests for three-stars. Invoke with `
 
 ```
 tests/
-├── conftest.py                 # Shared fixtures (dummy AWS creds, sample config, project_dir)
+├── conftest.py                 # Shared fixtures (dummy AWS creds, sample config, project_dir, make_test_names)
 ├── test_config.py              # Pure logic — config loading, validation
 ├── test_state.py               # Pure logic — state serialization, backup
 ├── test_storage.py             # Resource contract tests (moto)
@@ -16,12 +16,12 @@ tests/
 ├── test_deploy.py              # Orchestration tests (pure mock)
 ├── test_destroy.py             # Orchestration tests (pure mock)
 ├── test_mcp.py                 # Template tools tests
-├── test_agent.py               # Template handler tests
 │
 └── integration/
     ├── __init__.py
     ├── conftest.py             # Real AWS fixtures
-    └── test_agentcore.py       # Real AWS lifecycle tests
+    ├── test_agentcore.py       # Real AWS lifecycle tests
+    └── test_agent.py           # Template handler/streaming/memory tests
 ```
 
 ### Run Commands
@@ -98,9 +98,62 @@ When invoked, follow this procedure:
 
 4. **Implement** — write the missing tests (or ask user which to prioritize)
 
+## Naming and Fixtures
+
+**NEVER hardcode resource names in tests.** All resource names (bucket, role, function names, etc.) MUST be derived from `naming.py` via the shared helper in `tests/conftest.py`:
+
+```python
+from tests.conftest import make_test_names
+
+NAMES = make_test_names()            # project_name="test"
+NAMES = make_test_names("test-app")  # custom project name
+```
+
+`make_test_names()` calls `compute_names()` with a real `ProjectConfig` and canonical test account ID `"123456789012"`. This ensures:
+- Names stay in sync with `naming.py` automatically
+- Naming convention changes require zero test updates
+- Tests catch real naming regressions instead of passing against stale hardcoded strings
+
+**Do:**
+```python
+NAMES = make_test_names()
+
+def _make_existing_state():
+    return AgentCoreState(
+        iam_role_name=NAMES.agentcore_role,
+        iam_role_arn=f"arn:aws:iam::123456789012:role/{NAMES.agentcore_role}",
+        ...
+    )
+
+# Assertions reference names, not hardcoded strings
+assert state.s3_bucket == names.bucket
+mock_del_role.assert_called_once_with(ctx, NAMES.agentcore_role)
+```
+
+**Don't:**
+```python
+# WRONG — hardcoded names that silently drift from naming.py
+return ResourceNames(
+    prefix="sss-test",
+    bucket="sss-test-abc12345",
+    agentcore_role="sss-test-role",
+    ...
+)
+assert state.s3_bucket == "sss-test-abc12345"
+```
+
+This rule applies to:
+- `ResourceNames` construction — always use `make_test_names()`, never construct manually
+- Mock return values — use `f"arn:.../{NAMES.agentcore_role}"` not `"arn:.../sss-test-role"`
+- Assertions — compare against `NAMES.*` fields, not literal strings
+- Helper functions like `_make_existing_state()` — reference `NAMES` for name-derived fields
+
+Non-name values (runtime IDs, ARN path segments, status strings, distribution IDs) can remain hardcoded since they aren't governed by `naming.py`.
+
 ## Key Principles
 
 - **Test your code, not AWS**: Mocks verify correct API calls and state handling, not AWS behavior
 - **Contract tests**: Each resource's `deploy()` must return the correct state type with all fields populated
 - **Orchestration isolation**: Deploy/destroy tests mock all resource modules completely
+- **No hardcoded resource names**: Always derive from `make_test_names()` via `naming.py`
 - **Fast by default**: All tests under `tests/` (excluding `integration/`) should run in < 10 seconds
