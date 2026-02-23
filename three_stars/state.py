@@ -20,6 +20,8 @@ class AgentCoreState:
     runtime_arn: str
     endpoint_name: str
     endpoint_arn: str
+    memory_id: str | None = None
+    memory_name: str | None = None
 
 
 @dataclass

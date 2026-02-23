@@ -92,6 +92,7 @@
         const messagesEl = document.getElementById('messages');
         const inputEl = document.getElementById('input');
         const sendBtn = document.getElementById('send');
+        const sessionId = crypto.randomUUID();
 
         inputEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !sendBtn.disabled) sendMessage();
@@ -126,7 +127,7 @@
                 const resp = await fetch('/api/invoke', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: JSON.stringify({ message: text, session_id: sessionId }),
                 });
 
                 const contentType = resp.headers.get('Content-Type') || '';

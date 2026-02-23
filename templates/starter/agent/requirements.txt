@@ -1,2 +1,2 @@
-strands-agents
+strands-agents[mcp]
 bedrock-agentcore

@@ -105,3 +105,40 @@ class TestLoadConfig:
         (tmp_path / "three-stars.yml").write_text("- item1\n- item2\n")
         with pytest.raises(ConfigError, match="YAML mapping"):
             load_config(tmp_path)
+
+    def test_env_vars_loaded(self, project_dir):
+        config_path = project_dir / "three-stars.yml"
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        data["agent"]["env_vars"] = {"TAVILY_API_KEY": "tvly-xxx", "OTHER": "val"}
+        with open(config_path, "w") as f:
+            yaml.dump(data, f)
+
+        config = load_config(project_dir)
+        assert config.agent.env_vars == {"TAVILY_API_KEY": "tvly-xxx", "OTHER": "val"}
+
+    def test_env_vars_default_empty(self, project_dir):
+        config = load_config(project_dir)
+        assert config.agent.env_vars == {}
+
+    def test_env_vars_not_a_mapping(self, project_dir):
+        config_path = project_dir / "three-stars.yml"
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        data["agent"]["env_vars"] = ["not", "a", "dict"]
+        with open(config_path, "w") as f:
+            yaml.dump(data, f)
+
+        with pytest.raises(ConfigError, match="agent.env_vars.*must be a mapping"):
+            load_config(project_dir)
+
+    def test_env_vars_non_string_value(self, project_dir):
+        config_path = project_dir / "three-stars.yml"
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        data["agent"]["env_vars"] = {"KEY": 123}
+        with open(config_path, "w") as f:
+            yaml.dump(data, f)
+
+        with pytest.raises(ConfigError, match="agent.env_vars.*must be strings"):
+            load_config(project_dir)

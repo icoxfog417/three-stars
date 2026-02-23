@@ -206,6 +206,8 @@ def _print_resource_details(state: DeploymentState) -> None:
     if state.agentcore:
         details.append(("Runtime", state.agentcore.runtime_id))
         details.append(("IAM Role", state.agentcore.iam_role_arn))
+        if state.agentcore.memory_id:
+            details.append(("Memory", state.agentcore.memory_id))
     if state.edge:
         details.append(("Function", state.edge.function_arn))
         details.append(("Edge Role", state.edge.role_arn))
