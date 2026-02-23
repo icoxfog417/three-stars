@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/run-fast-tests.sh",
+            "timeout": 60,
+            "async": true,
+            "statusMessage": "Running tests..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if Claude edited any files in three_stars/resources/ or three_stars/commands/ during this conversation turn. If yes, verify that corresponding test files in tests/ cover the 6 resource test cases or orchestration test cases defined in .claude/skills/test-manager/SKILL.md. If tests are missing, respond with a reminder listing which tests need to be added. If no resource/command files were edited, or tests already exist, respond with nothing.",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

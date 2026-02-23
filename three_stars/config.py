@@ -17,6 +17,7 @@ class AgentConfig:
     source: str = "./agent"
     model: str = "us.anthropic.claude-sonnet-4-6"
     description: str = ""
+    env_vars: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -91,10 +92,18 @@ def load_config(
     region = region_override or raw.get("region", "us-east-1")
 
     agent_raw = raw.get("agent", {})
+    env_vars_raw = agent_raw.get("env_vars", {})
+    if not isinstance(env_vars_raw, dict):
+        raise ConfigError(f"'agent.env_vars' must be a mapping, got {type(env_vars_raw).__name__}")
+    for k, v in env_vars_raw.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise ConfigError(f"agent.env_vars key and value must be strings, got {k!r}: {v!r}")
+
     agent = AgentConfig(
         source=agent_raw.get("source", "./agent"),
         model=agent_raw.get("model", AgentConfig.model),
         description=agent_raw.get("description", ""),
+        env_vars=env_vars_raw,
     )
 
     app_raw = raw.get("app", {})

@@ -37,6 +37,7 @@ dev = [
     "moto[cloudfront,iam,lambda,s3,sts]>=5.0",
     "pytest>=8.0",
     "ruff>=0.9",
+    "strands-agents[mcp]",
 ]
 
 [project.scripts]
@@ -71,8 +72,3 @@ select = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-
-[tool.uv.workspace]
-members = [
-    ".sandbox/test-dx",
-]

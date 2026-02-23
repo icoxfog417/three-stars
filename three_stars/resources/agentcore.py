@@ -1,15 +1,18 @@
-"""AgentCore resource module — IAM role + runtime + endpoint.
+"""AgentCore resource module — IAM role + runtime + endpoint + memory.
 
 Uses bedrock-agentcore-starter-toolkit for code packaging, runtime CRUD,
-and endpoint polling, with custom IAM logic.
+and endpoint polling, with custom IAM logic.  Memory is managed via the
+bedrock-agentcore SDK's MemoryClient.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 
+from bedrock_agentcore.memory import MemoryClient
 from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
 from bedrock_agentcore_starter_toolkit.utils.runtime.create_with_iam_eventual_consistency import (
     retry_create_with_eventual_iam_consistency,
@@ -55,8 +58,26 @@ def deploy(
     agent_key = f"agents/{config.name}/agent.zip"
     _package_and_upload(ctx, agent_path, names.agent_name, bucket_name, agent_key)
 
+    # Create or reuse AgentCore Memory resource.
+    # The SDK logs at ERROR level when the memory already exists (before the
+    # create_or_get_memory fallback kicks in).  Suppress that expected noise.
+    memory_client = MemoryClient(region_name=config.region)
+    _memory_logger = logging.getLogger("bedrock_agentcore.memory")
+    _prev_level = _memory_logger.level
+    _memory_logger.setLevel(logging.CRITICAL)
+    try:
+        memory_info = memory_client.create_or_get_memory(
+            name=names.memory,
+            description=f"Conversation memory for {config.name}",
+        )
+    finally:
+        _memory_logger.setLevel(_prev_level)
+    memory_id = memory_info["id"]
+    memory_name = memory_info.get("name", names.memory)
+
     # Set AWS_DEFAULT_REGION so agent code can create regional clients
-    env_vars = {"AWS_DEFAULT_REGION": config.region}
+    env_vars = {"AWS_DEFAULT_REGION": config.region, "MEMORY_ID": memory_id}
+    env_vars.update(config.agent.env_vars)
 
     # Determine whether this is a create or update
     agent_id = existing.runtime_id if existing and not _is_empty_state(existing) else None
@@ -72,7 +93,7 @@ def deploy(
             code_s3_bucket=bucket_name,
             code_s3_key=agent_key,
             runtime_type=_RUNTIME_VERSION,
-            entrypoint_array=["agent.py"],
+            entrypoint_array=["opentelemetry-instrument", "agent.py"],
             network_config={"networkMode": "PUBLIC"},
             env_vars=env_vars,
             auto_update_on_conflict=True,
@@ -104,6 +125,8 @@ def deploy(
         runtime_arn=runtime_arn,
         endpoint_name="DEFAULT",
         endpoint_arn=endpoint_arn,
+        memory_id=memory_id,
+        memory_name=memory_name,
     )
 
 
@@ -138,6 +161,15 @@ def set_resource_policy(
 def destroy(ctx: AWSContext, state: AgentCoreState) -> None:
     """Delete AgentCore resources."""
     client = ctx.client("bedrock-agentcore-control")
+
+    # Delete Memory resource (if present)
+    if state.memory_id:
+        try:
+            memory_client = MemoryClient(region_name=ctx.session.region_name)
+            memory_client.delete_memory_and_wait(memory_id=state.memory_id)
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ResourceNotFoundException":
+                raise
 
     # Legacy deployments may have a non-DEFAULT endpoint; delete it explicitly.
     # For DEFAULT endpoints, deleting the runtime auto-deletes the endpoint.
@@ -184,6 +216,23 @@ def get_status(ctx: AWSContext, state: AgentCoreState) -> list[ResourceStatus]:
 
     # Endpoint
     rows.append(ResourceStatus("AgentCore Endpoint", state.endpoint_name, rows[0].status))
+
+    # Memory
+    if state.memory_id:
+        mem_name = "AgentCore Memory"
+        try:
+            memory_client = MemoryClient(region_name=ctx.session.region_name)
+            mem_status = memory_client.get_memory_status(memory_id=state.memory_id)
+            if mem_status == "ACTIVE":
+                rows.append(ResourceStatus(mem_name, state.memory_id, "[green]Active[/green]"))
+            elif mem_status in ("CREATING", "UPDATING"):
+                rows.append(
+                    ResourceStatus(mem_name, state.memory_id, f"[yellow]{mem_status}[/yellow]")
+                )
+            else:
+                rows.append(ResourceStatus(mem_name, state.memory_id, f"[red]{mem_status}[/red]"))
+        except Exception:
+            rows.append(ResourceStatus(mem_name, state.memory_id, "[red]Not Found[/red]"))
 
     # IAM role
     rows.append(ResourceStatus("AgentCore IAM Role", state.iam_role_name, "[green]Active[/green]"))
@@ -266,6 +315,7 @@ def _create_iam_role(
         "Version": "2012-10-17",
         "Statement": [
             {
+                "Sid": "BedrockModelInvocation",
                 "Effect": "Allow",
                 "Action": [
                     "bedrock:InvokeModel",
@@ -280,6 +330,88 @@ def _create_iam_role(
                 "Effect": "Allow",
                 "Action": ["s3:GetObject"],
                 "Resource": "arn:aws:s3:::sss-*/*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock-agentcore:CreateEvent",
+                    "bedrock-agentcore:GetEvent",
+                    "bedrock-agentcore:ListEvents",
+                    "bedrock-agentcore:DeleteEvent",
+                    "bedrock-agentcore:ListSessions",
+                    "bedrock-agentcore:GetMemory",
+                    "bedrock-agentcore:RetrieveMemories",
+                ],
+                "Resource": f"arn:aws:bedrock-agentcore:*:{account_id}:memory/*",
+            },
+            # CloudWatch Logs — required for AgentCore runtime observability
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:DescribeLogStreams",
+                ],
+                "Resource": (
+                    f"arn:aws:logs:*:{account_id}"
+                    ":log-group:/aws/bedrock-agentcore/runtimes/*"
+                ),
+            },
+            {
+                "Effect": "Allow",
+                "Action": "logs:DescribeLogGroups",
+                "Resource": f"arn:aws:logs:*:{account_id}:log-group:*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                ],
+                "Resource": (
+                    f"arn:aws:logs:*:{account_id}"
+                    ":log-group:/aws/bedrock-agentcore/runtimes/*"
+                    ":log-stream:*"
+                ),
+            },
+            # X-Ray tracing
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords",
+                    "xray:GetSamplingRules",
+                    "xray:GetSamplingTargets",
+                ],
+                "Resource": "*",
+            },
+            # CloudWatch Metrics
+            {
+                "Effect": "Allow",
+                "Action": "cloudwatch:PutMetricData",
+                "Resource": "*",
+                "Condition": {
+                    "StringEquals": {"cloudwatch:namespace": "bedrock-agentcore"}
+                },
+            },
+            # Workload Identity
+            {
+                "Sid": "GetAgentAccessToken",
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock-agentcore:GetWorkloadAccessToken",
+                    "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+                    "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+                ],
+                "Resource": [
+                    f"arn:aws:bedrock-agentcore:*:{account_id}:workload-identity-directory/default",
+                    f"arn:aws:bedrock-agentcore:*:{account_id}:workload-identity-directory/default/workload-identity/*",
+                ],
+            },
+            # AWS MCP — required for mcp-proxy-for-aws tool access
+            {
+                "Effect": "Allow",
+                "Action": "aws-mcp:InvokeMcp",
+                "Resource": "*",
             },
         ],
     }

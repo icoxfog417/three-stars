@@ -19,6 +19,7 @@ class ResourceNames:
     lambda_function: str
     edge_role: str
     edge_function: str
+    memory: str
 
 
 def get_resource_prefix(config: ProjectConfig) -> str:
@@ -40,6 +41,7 @@ def compute_names(config: ProjectConfig, account_id: str) -> ResourceNames:
         lambda_function=f"{prefix}-api-bridge",
         edge_role=f"{prefix}-edge-role",
         edge_function=f"{prefix}-edge-sha256",
+        memory=f"{ac_prefix}_memory",
     )
 
 

@@ -12,30 +12,28 @@ Test the three-stars developer experience end-to-end: $ARGUMENTS
 
 You are a **developer experience evaluator**. Your job is to walk through the full three-stars lifecycle as a new developer would, recording timings, output quality, errors, and surprises. Work entirely inside the project's `.sandbox/test-dx/` directory.
 
-**IMPORTANT**: The project root is the directory containing this skill file's parent `.claude/` directory. All `.sandbox/` paths are relative to the project root. Install three-stars from the project root using `uv pip install -e <project-root>`.
+**IMPORTANT**: The project root is the directory containing this skill file's parent `.claude/` directory. All `.sandbox/` paths are relative to the project root. Install three-stars from the project root using `uv pip install -e <project-root>`. The Bash tool does NOT preserve `cd` across separate calls — always use absolute paths or chain commands with `&&` in a single Bash call. Use ONE app (`my-test-app`) for the entire test.
 
 ## Test Procedure
 
 ### Phase 0: Setup
 
+Define absolute paths up front and use them in every Bash call:
+
 ```bash
-cd <project-root>
-mkdir -p .sandbox/test-dx
-cd .sandbox/test-dx
-uv init
-uv venv && uv pip install -e <project-root>
+PROJECT_ROOT=<absolute-project-root>
+SANDBOX=$PROJECT_ROOT/.sandbox/test-dx
+mkdir -p $SANDBOX && cd $SANDBOX && uv init && uv venv && uv pip install -e $PROJECT_ROOT
 ```
 
 Verify:
-- `sss --help` prints usage
-- `sss --version` prints a version number
+- `cd $SANDBOX && source .venv/bin/activate && sss --help` prints usage
+- `cd $SANDBOX && source .venv/bin/activate && sss --version` prints a version number
 
 ### Phase 1: Init (Scaffold)
 
 ```bash
-cd .sandbox/test-dx
-source .venv/bin/activate
-sss init my-test-app
+cd $SANDBOX && source .venv/bin/activate && sss init my-test-app
 ```
 
 **Check:**
@@ -49,14 +47,14 @@ sss init my-test-app
 ### Phase 2: Deploy — 1st WoW (First Deployment)
 
 ```bash
-cd my-test-app
-time sss deploy -y -v
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && time sss deploy -y -v
 ```
 
 **Check:**
 - [ ] Progress output shows step numbers `[1/5]` through `[5/5]`
 - [ ] Each step completes with green status
 - [ ] Health check table prints with all resources showing Active/Ready/Deployed
+- [ ] Memory resource appears in health check (Active status)
 - [ ] "Deployed successfully!" message with a URL is printed
 - [ ] Recovery commands are shown
 - [ ] `curl <URL>` returns 200 with the frontend HTML
@@ -64,14 +62,52 @@ time sss deploy -y -v
 
 **Record:** Total deploy time, any warnings, any confusing output.
 
-**PAUSE — User Browser Test**: After completing automated checks, use `AskUserQuestion` to show the deployed frontend URL and ask the user to test it in their browser. Present the URL clearly and ask them to confirm the frontend loads and the chat works. Wait for user confirmation before proceeding to Phase 3.
+**PAUSE — User Browser Test**: After completing automated checks, use `AskUserQuestion` to show the deployed frontend URL and ask the user to test it in their browser. Present the URL clearly and ask them to confirm the frontend loads and the chat works. Wait for user confirmation before proceeding.
+
+### Phase 2a: MCP Tool Verification (online)
+
+After a successful deploy, verify that the deployed agent can discover and invoke MCP tools. The agent's `.mcp.json` is deployed alongside the agent code, so tools should be auto-loaded at runtime.
+
+1. Invoke the agent via the API with a prompt that requires MCP tool use (e.g. ask it to use one of its configured tools)
+2. Check CloudWatch logs for the agent's Lambda function for evidence of MCP tool loading/invocation
+
+**Check:**
+- [ ] Agent responds successfully when prompted to use an MCP tool
+- [ ] CloudWatch logs show MCP tool discovery or invocation entries
+
+**Record:** Whether MCP tools loaded automatically, any errors in logs.
+
+### Phase 2b: Conversation Memory Test
+
+After first deploy, verify that AgentCore Memory preserves conversation history within a session. Generate a single `session_id` and send two sequential messages:
+
+```bash
+SESSION_ID=$(uuidgen)
+
+# Message 1: Tell the agent something memorable
+curl -s -X POST <URL>/api/invoke \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"My name is Alice and I like strawberries.\", \"session_id\":\"$SESSION_ID\"}"
+
+# Message 2: Ask the agent to recall it
+curl -s -X POST <URL>/api/invoke \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"What is my name and what do I like?\", \"session_id\":\"$SESSION_ID\"}"
+```
+
+**Check:**
+- [ ] Message 2 response contains "Alice" — proves conversation history was retrieved
+- [ ] Message 2 response contains "strawberries" — proves context persisted
+- [ ] Using a *different* session_id does NOT recall the conversation (session isolation)
+
+**Record:** Whether memory worked on first try, any latency between messages needed.
 
 ### Phase 3: Update & Redeploy — 2nd WoW (Fast Iteration)
 
-Make a visible change to the frontend (e.g., update `<h1>` text), then:
+Make a visible change to the frontend (e.g., update `<h1>` text in `$APP_DIR/app/index.html`), then:
 
 ```bash
-time sss deploy -y -v
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && time sss deploy -y -v
 ```
 
 **Check:**
@@ -88,18 +124,18 @@ time sss deploy -y -v
 ### Phase 4: Status Check
 
 ```bash
-sss status
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && sss status
 ```
 
 **Check:**
-- [ ] Status table shows all resources
+- [ ] Status table shows all resources including Memory
 - [ ] URL is printed
 - [ ] No error warnings
 
 ### Phase 5: Destroy — Clean Teardown
 
 ```bash
-sss destroy --yes
+cd $APP_DIR && source $SANDBOX/.venv/bin/activate && sss destroy --yes
 ```
 
 **Check:**
@@ -117,7 +153,7 @@ sss destroy --yes
 ### Phase 6: Cleanup
 
 ```bash
-rm -rf .sandbox/test-dx/my-test-app
+rm -rf $APP_DIR
 ```
 
 ## Report Format
@@ -179,6 +215,36 @@ After completing all phases, write a DX report to `.sandbox/test-dx/DX_REPORT.md
 | P0 | ... | ... |
 | P1 | ... | ... |
 | P2 | ... | ... |
+
+## Conversation Memory (AgentCore Memory)
+
+**Rating**: X/10
+
+**Memory recall test:**
+- Told agent: "My name is Alice and I like strawberries"
+- Asked: "What is my name and what do I like?"
+- Agent recalled correctly: YES/NO
+- Session isolation verified: YES/NO
+
+**Positives:**
+- ...
+
+**Issues:**
+- ...
+
+## MCP Tools (Online Verification)
+
+**Rating**: X/10
+
+- Agent auto-loaded MCP tools after deploy: YES/NO
+- Agent responded to MCP tool prompt: YES/NO
+- CloudWatch logs confirm tool discovery: YES/NO
+
+**Positives:**
+- ...
+
+**Issues:**
+- ...
 
 ## User Browser Test Feedback
 

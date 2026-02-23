@@ -1,171 +1,281 @@
-"""Integration tests for AgentCore resource module.
+"""Contract tests for AgentCore resource module (mock-based).
 
-These tests deploy real resources to AWS and verify the full lifecycle:
-packaging, deploy, invoke, update, status, and destroy.
-
-Run with:  uv run pytest tests/resources/test_agentcore.py -v -s
+These tests verify our code's logic (API call patterns, state shape,
+error handling) — NOT AWS behavior.  Integration tests with real AWS
+live in tests/integration/test_agentcore.py.
 """
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
-import shutil
-import uuid
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-import boto3
 import pytest
+from botocore.exceptions import ClientError
 
+from tests.conftest import make_test_names
 from three_stars.config import AgentConfig, ProjectConfig
-from three_stars.naming import compute_names
 from three_stars.resources import agentcore
-from three_stars.resources._base import AWSContext
+from three_stars.state import AgentCoreState
 
-REGION = "us-east-1"
-PROJECT_NAME = "sss-e2e-test"
-
-
-@pytest.fixture(autouse=True)
-def _aws_credentials():
-    """Override the root conftest dummy credentials — use real AWS credentials."""
-    # Remove dummy credentials so boto3 picks up the real ones from
-    # environment / instance profile / config file.
-    saved = {}
-    for key in [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SECURITY_TOKEN",
-        "AWS_SESSION_TOKEN",
-    ]:
-        saved[key] = os.environ.pop(key, None)
-    os.environ["AWS_DEFAULT_REGION"] = REGION
-    yield
-    # Restore whatever was there before (root conftest expects to pop them)
-    for key, val in saved.items():
-        if val is not None:
-            os.environ[key] = val
+NAMES = make_test_names()
 
 
-@pytest.fixture(scope="module")
-def aws_ctx():
-    return AWSContext(boto3.Session(region_name=REGION))
-
-
-@pytest.fixture(scope="module")
-def agent_dir(tmp_path_factory):
-    """Create a minimal agent directory for testing."""
-    d = tmp_path_factory.mktemp("agent_project")
-    agent = d / "agent"
-    agent.mkdir()
-    (agent / "agent.py").write_text(
-        "from bedrock_agentcore.runtime import BedrockAgentCoreApp\n"
-        "app = BedrockAgentCoreApp()\n"
-        "@app.entrypoint\n"
-        "def handler(payload):\n"
-        "    return {\"message\": f\"echo: {payload.get('prompt', '')}\"}\n"
-        'if __name__ == "__main__":\n'
-        "    app.run()\n"
+def _make_config(tmp_path: Path) -> ProjectConfig:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / "agent.py").write_text("pass")
+    (agent_dir / "requirements.txt").write_text("")
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "index.html").write_text("<html></html>")
+    return ProjectConfig(
+        name="test-app",
+        region="us-east-1",
+        agent=AgentConfig(source="agent", description="Test agent"),
+        project_dir=tmp_path,
     )
-    (agent / "requirements.txt").write_text("bedrock-agentcore\n")
-    return d
 
 
-@pytest.fixture(scope="module")
-def config_and_names(agent_dir, aws_ctx):
-    config = ProjectConfig(
-        name=PROJECT_NAME,
-        region=REGION,
-        agent=AgentConfig(source="agent", description="E2E test agent"),
-        project_dir=agent_dir,
+def _make_existing_state() -> AgentCoreState:
+    return AgentCoreState(
+        iam_role_name=NAMES.agentcore_role,
+        iam_role_arn=f"arn:aws:iam::123456789012:role/{NAMES.agentcore_role}",
+        runtime_id="rt-existing",
+        runtime_arn="arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/rt-existing",
+        endpoint_name="DEFAULT",
+        endpoint_arn="arn:aws:bedrock-agentcore:us-east-1:123456789012:endpoint/ep-existing",
+        memory_id="mem-123",
+        memory_name=NAMES.memory,
     )
-    names = compute_names(config, aws_ctx.account_id)
-    return config, names
 
 
-@pytest.fixture(scope="module")
-def s3_bucket(aws_ctx, config_and_names):
-    """Create and tear down an S3 bucket for the test module."""
-    _, names = config_and_names
-    bucket_name = names.bucket
-    s3 = aws_ctx.client("s3")
-    with contextlib.suppress(s3.exceptions.BucketAlreadyOwnedByYou):
-        s3.create_bucket(Bucket=bucket_name)
-    yield bucket_name
-    # Cleanup
-    try:
-        paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket_name):
-            for obj in page.get("Contents", []):
-                s3.delete_object(Bucket=bucket_name, Key=obj["Key"])
-        s3.delete_bucket(Bucket=bucket_name)
-    except Exception:
-        pass
+# Common patches for all deploy tests — mock external dependencies that
+# are not installable locally (bedrock_agentcore SDK, toolkit).
+_DEPLOY_PATCHES = [
+    "three_stars.resources.agentcore._create_iam_role",
+    "three_stars.resources.agentcore._package_and_upload",
+    "three_stars.resources.agentcore.MemoryClient",
+    "three_stars.resources.agentcore.BedrockAgentCoreClient",
+    "three_stars.resources.agentcore.retry_create_with_eventual_iam_consistency",
+]
 
 
-@pytest.fixture(scope="module")
-def deployed_state(aws_ctx, config_and_names, s3_bucket):
-    """Deploy AgentCore resources; tear down after all tests in module."""
-    config, names = config_and_names
-    state = agentcore.deploy(aws_ctx, config, names, bucket_name=s3_bucket)
-    yield state
-    # Cleanup — destroy the runtime (IAM role cleaned up here too)
-    with contextlib.suppress(Exception):
-        agentcore.destroy(aws_ctx, state)
-    # Clean up packaging cache created inside agent dir
-    cache_dir = config.project_dir / "agent" / ".bedrock_agentcore"
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir, ignore_errors=True)
+class TestDeployReturnsState:
+    """deploy() returns AgentCoreState with all fields populated."""
 
-
-class TestDeploy:
-    def test_runtime_id_returned(self, deployed_state):
-        assert deployed_state.runtime_id
-        assert deployed_state.runtime_arn.startswith("arn:")
-
-    def test_endpoint_is_default(self, deployed_state):
-        assert deployed_state.endpoint_name == "DEFAULT"
-        assert deployed_state.endpoint_arn.startswith("arn:")
-
-    def test_iam_role_created(self, deployed_state):
-        assert deployed_state.iam_role_name
-        assert deployed_state.iam_role_arn.startswith("arn:")
-
-
-class TestInvoke:
-    def test_invoke_returns_echo(self, aws_ctx, deployed_state):
-        """Invoke the deployed endpoint and verify the agent responds."""
-        data_client = aws_ctx.client("bedrock-agentcore")
-        response = data_client.invoke_agent_runtime(
-            agentRuntimeArn=deployed_state.runtime_arn,
-            qualifier="DEFAULT",
-            runtimeSessionId=str(uuid.uuid4()),
-            payload=json.dumps({"prompt": "ping"}),
-            contentType="application/json",
-        )
-        body = json.loads(response["response"].read().decode("utf-8"))
-        assert body["message"] == "echo: ping"
-
-
-class TestStatus:
-    def test_runtime_ready(self, aws_ctx, deployed_state):
-        rows = agentcore.get_status(aws_ctx, deployed_state)
-        runtime_row = rows[0]
-        assert "Ready" in runtime_row.status
-
-    def test_endpoint_ready(self, aws_ctx, deployed_state):
-        rows = agentcore.get_status(aws_ctx, deployed_state)
-        endpoint_row = rows[1]
-        assert "Ready" in endpoint_row.status
-
-
-class TestUpdate:
-    def test_update_preserves_runtime_id(
-        self, aws_ctx, config_and_names, s3_bucket, deployed_state
+    @patch("three_stars.resources.agentcore.retry_create_with_eventual_iam_consistency")
+    @patch("three_stars.resources.agentcore.BedrockAgentCoreClient")
+    @patch("three_stars.resources.agentcore.MemoryClient")
+    @patch("three_stars.resources.agentcore._package_and_upload")
+    @patch("three_stars.resources.agentcore._create_iam_role")
+    def test_deploy_returns_state(
+        self, mock_iam, mock_pkg, mock_mem_cls, mock_toolkit_cls, mock_retry, tmp_path
     ):
-        config, names = config_and_names
-        updated = agentcore.deploy(
-            aws_ctx, config, names, bucket_name=s3_bucket, existing=deployed_state
+        ctx = MagicMock()
+        ctx.account_id = "123456789012"
+        config = _make_config(tmp_path)
+        names = NAMES
+
+        mock_iam.return_value = f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
+        mock_mem_cls.return_value.create_or_get_memory.return_value = {
+            "id": "mem-456",
+            "name": names.memory,
+        }
+        mock_retry.return_value = {
+            "id": "rt-789",
+            "arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/rt-789",
+        }
+        toolkit_instance = mock_toolkit_cls.return_value
+        toolkit_instance.wait_for_agent_endpoint_ready.return_value = (
+            "arn:aws:bedrock-agentcore:us-east-1:123456789012:endpoint/ep-789"
         )
-        assert updated.runtime_id == deployed_state.runtime_id
-        assert updated.endpoint_name == "DEFAULT"
+
+        state = agentcore.deploy(ctx, config, names, bucket_name="test-bucket")
+
+        assert isinstance(state, AgentCoreState)
+        assert state.iam_role_name == names.agentcore_role
+        assert state.iam_role_arn == f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
+        assert state.runtime_id == "rt-789"
+        assert state.runtime_arn.startswith("arn:")
+        assert state.endpoint_name == "DEFAULT"
+        assert state.endpoint_arn.startswith("arn:")
+        assert state.memory_id == "mem-456"
+
+
+class TestDeployUpdateIdempotent:
+    """Re-deploy with existing state passes existing to toolkit (update path)."""
+
+    @patch("three_stars.resources.agentcore.retry_create_with_eventual_iam_consistency")
+    @patch("three_stars.resources.agentcore.BedrockAgentCoreClient")
+    @patch("three_stars.resources.agentcore.MemoryClient")
+    @patch("three_stars.resources.agentcore._package_and_upload")
+    @patch("three_stars.resources.agentcore._create_iam_role")
+    def test_deploy_update_idempotent(
+        self, mock_iam, mock_pkg, mock_mem_cls, mock_toolkit_cls, mock_retry, tmp_path
+    ):
+        ctx = MagicMock()
+        ctx.account_id = "123456789012"
+        config = _make_config(tmp_path)
+        names = NAMES
+        existing = _make_existing_state()
+
+        mock_iam.return_value = f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
+        mock_mem_cls.return_value.create_or_get_memory.return_value = {
+            "id": "mem-123",
+            "name": names.memory,
+        }
+        mock_retry.return_value = {
+            "id": "rt-existing",
+            "arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/rt-existing",
+        }
+        toolkit_instance = mock_toolkit_cls.return_value
+        toolkit_instance.wait_for_agent_endpoint_ready.return_value = (
+            "arn:aws:bedrock-agentcore:us-east-1:123456789012:endpoint/ep-existing"
+        )
+
+        state = agentcore.deploy(ctx, config, names, bucket_name="test-bucket", existing=existing)
+
+        assert state.runtime_id == "rt-existing"
+        # Verify the toolkit received the existing agent_id for update
+        assert mock_retry.called
+        assert state.endpoint_name == "DEFAULT"
+
+
+class TestDeployErrorHandling:
+    """Handles errors from IAM or toolkit gracefully."""
+
+    @patch("three_stars.resources.agentcore._create_iam_role")
+    def test_iam_error_propagates(self, mock_iam, tmp_path):
+        ctx = MagicMock()
+        ctx.account_id = "123456789012"
+        config = _make_config(tmp_path)
+        names = NAMES
+
+        mock_iam.side_effect = ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "Not authorized"}},
+            "CreateRole",
+        )
+
+        with pytest.raises(ClientError) as exc_info:
+            agentcore.deploy(ctx, config, names, bucket_name="test-bucket")
+        assert exc_info.value.response["Error"]["Code"] == "AccessDenied"
+
+    @patch("three_stars.resources.agentcore.retry_create_with_eventual_iam_consistency")
+    @patch("three_stars.resources.agentcore.BedrockAgentCoreClient")
+    @patch("three_stars.resources.agentcore.MemoryClient")
+    @patch("three_stars.resources.agentcore._package_and_upload")
+    @patch("three_stars.resources.agentcore._create_iam_role")
+    def test_endpoint_timeout_raises(
+        self, mock_iam, mock_pkg, mock_mem_cls, mock_toolkit_cls, mock_retry, tmp_path
+    ):
+        ctx = MagicMock()
+        ctx.account_id = "123456789012"
+        config = _make_config(tmp_path)
+        names = NAMES
+
+        mock_iam.return_value = f"arn:aws:iam::123456789012:role/{names.agentcore_role}"
+        mock_mem_cls.return_value.create_or_get_memory.return_value = {
+            "id": "mem-456",
+            "name": names.memory,
+        }
+        mock_retry.return_value = {
+            "id": "rt-789",
+            "arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/rt-789",
+        }
+        # Simulate endpoint timeout — toolkit returns non-ARN string
+        toolkit_instance = mock_toolkit_cls.return_value
+        toolkit_instance.wait_for_agent_endpoint_ready.return_value = "TIMEOUT"
+
+        with pytest.raises(TimeoutError, match="did not reach READY"):
+            agentcore.deploy(ctx, config, names, bucket_name="test-bucket")
+
+
+class TestDestroyCleanup:
+    """destroy() removes all resources."""
+
+    def test_destroy_cleans_up(self):
+        ctx = MagicMock()
+        state = _make_existing_state()
+
+        # Mock the bedrock-agentcore-control client
+        control_client = MagicMock()
+        memory_client = MagicMock()
+
+        ctx.client.return_value = control_client
+
+        with patch("three_stars.resources.agentcore.MemoryClient") as mock_mem_cls:
+            mock_mem_cls.return_value = memory_client
+            with patch("three_stars.resources.agentcore._delete_iam_role") as mock_del_role:
+                agentcore.destroy(ctx, state)
+
+        # Verify memory was deleted
+        memory_client.delete_memory_and_wait.assert_called_once_with(memory_id="mem-123")
+        # Verify runtime was deleted
+        control_client.delete_agent_runtime.assert_called_once_with(agentRuntimeId="rt-existing")
+        # Verify IAM role was deleted
+        mock_del_role.assert_called_once_with(ctx, NAMES.agentcore_role)
+
+
+class TestDestroyIdempotent:
+    """destroy() on already-deleted resources is a no-op."""
+
+    def test_destroy_idempotent(self):
+        ctx = MagicMock()
+        state = _make_existing_state()
+
+        control_client = MagicMock()
+        # Simulate ResourceNotFoundException for runtime
+        control_client.delete_agent_runtime.side_effect = ClientError(
+            {"Error": {"Code": "ResourceNotFoundException", "Message": "Not found"}},
+            "DeleteAgentRuntime",
+        )
+        ctx.client.return_value = control_client
+
+        memory_client = MagicMock()
+        memory_client.delete_memory_and_wait.side_effect = ClientError(
+            {"Error": {"Code": "ResourceNotFoundException", "Message": "Not found"}},
+            "DeleteMemory",
+        )
+
+        with (
+            patch("three_stars.resources.agentcore.MemoryClient") as mock_mem_cls,
+            patch("three_stars.resources.agentcore._delete_iam_role"),
+        ):
+            mock_mem_cls.return_value = memory_client
+            # Should not raise
+            agentcore.destroy(ctx, state)
+
+
+class TestGetStatus:
+    """get_status() returns correct status rows."""
+
+    def test_get_status_ready(self):
+        ctx = MagicMock()
+        state = _make_existing_state()
+
+        control_client = MagicMock()
+        control_client.get_agent_runtime.return_value = {"status": "READY"}
+        ctx.client.return_value = control_client
+
+        with patch("three_stars.resources.agentcore.MemoryClient") as mock_mem_cls:
+            mock_mem_cls.return_value.get_memory_status.return_value = "ACTIVE"
+            rows = agentcore.get_status(ctx, state)
+
+        assert len(rows) >= 3  # Runtime, Endpoint, Memory, Role
+        assert "Ready" in rows[0].status
+        assert rows[0].resource == "AgentCore Runtime"
+
+    def test_get_status_not_found(self):
+        ctx = MagicMock()
+        state = _make_existing_state()
+
+        control_client = MagicMock()
+        control_client.get_agent_runtime.side_effect = Exception("Not found")
+        ctx.client.return_value = control_client
+
+        with patch("three_stars.resources.agentcore.MemoryClient") as mock_mem_cls:
+            mock_mem_cls.return_value.get_memory_status.side_effect = Exception("Not found")
+            rows = agentcore.get_status(ctx, state)
+
+        assert "Not Found" in rows[0].status

@@ -70,6 +70,10 @@ def handler(event, context):
     try:
         parsed = json.loads(body_bytes.decode("utf-8"))
         session_id = parsed.get("session_id") or str(uuid.uuid4())
+        # Write resolved session_id back so the agent handler can read it
+        parsed["session_id"] = session_id
+        body_bytes = json.dumps(parsed).encode("utf-8")
+        payload_hash = _sha256_hex(body_bytes)
     except Exception:
         session_id = str(uuid.uuid4())
 
@@ -166,6 +170,15 @@ def handler(event, context):
         request["headers"]["x-amz-security-token"] = [
             {"key": "X-Amz-Security-Token", "value": token}
         ]
+
+    # Update the request body with the (possibly modified) payload
+    if body_bytes:
+        request["body"] = {
+            "inputTruncated": False,
+            "action": "replace",
+            "encoding": "text",
+            "data": body_bytes.decode("utf-8"),
+        }
 
     return request
 """

@@ -82,6 +82,8 @@ def run_destroy(
         console.print(f"  - Lambda@Edge: {state.edge.function_name}")
     if state.agentcore:
         console.print(f"  - AgentCore Runtime: {state.agentcore.runtime_id}")
+        if state.agentcore.memory_id:
+            console.print(f"  - AgentCore Memory: {state.agentcore.memory_id}")
     if state.storage:
         console.print(f"  - S3 Bucket: {state.storage.s3_bucket}")
 
