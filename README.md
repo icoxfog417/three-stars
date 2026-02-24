@@ -43,6 +43,8 @@ Add this to your Claude Code MCP settings.
 }
 ```
 
+If you are the Windows user and facing MCP server connection error, please try `uv tool install three-stars` before setting MCP.
+
 ### Install as CLI
 
 ```bash
