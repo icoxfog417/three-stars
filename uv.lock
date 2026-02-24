@@ -1350,7 +1350,7 @@ wheels = [
 
 [[package]]
 name = "three-stars"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "bedrock-agentcore-starter-toolkit" },
