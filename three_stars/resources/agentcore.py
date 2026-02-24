@@ -7,10 +7,13 @@ bedrock-agentcore SDK's MemoryClient.
 
 from __future__ import annotations
 
+import configparser
 import json
 import logging
+import stat
 import time
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 from bedrock_agentcore.memory import MemoryClient
 from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
@@ -266,8 +269,79 @@ def _package_and_upload(
         requirements_file=requirements if requirements.exists() else None,
     )
 
+    _fix_windows_entrypoints(deployment_zip)
+
     s3 = ctx.client("s3")
     s3.upload_file(str(deployment_zip), bucket_name, key)
+
+
+def _fix_windows_entrypoints(zip_path: Path) -> None:
+    """Replace Windows .exe entry points with POSIX scripts in the deployment zip.
+
+    When ``uv pip install --target`` runs on Windows with
+    ``--python-platform aarch64-manylinux2014``, wheel binaries are correctly
+    cross-compiled but ``bin/`` launchers are emitted as ``.exe`` files for the
+    host OS.  AgentCore runtime (Linux) expects POSIX scripts.
+
+    See: https://github.com/aws/bedrock-agentcore-starter-toolkit/issues/397
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        exe_names = [
+            n
+            for n in zf.namelist()
+            if PurePosixPath(n).parent == PurePosixPath("bin") and n.endswith(".exe")
+        ]
+        if not exe_names:
+            return
+
+        # Parse console_scripts from entry_points.txt files
+        scripts: dict[str, tuple[str, str]] = {}  # name -> (module, func)
+        for entry in zf.namelist():
+            if entry.endswith(".dist-info/entry_points.txt"):
+                cp = configparser.ConfigParser()
+                cp.read_string(zf.read(entry).decode())
+                if cp.has_section("console_scripts"):
+                    for name, value in cp.items("console_scripts"):
+                        module, func = value.split(":")
+                        scripts[name.strip()] = (module.strip(), func.strip())
+
+        # Collect POSIX script names that already exist (non-.exe bin/ entries)
+        exe_set = set(exe_names)
+        existing_posix = {
+            PurePosixPath(n).stem
+            for n in zf.namelist()
+            if PurePosixPath(n).parent == PurePosixPath("bin")
+            and n not in exe_set
+            and not n.endswith(".exe")
+        }
+
+        # Rebuild zip: drop .exe files, add POSIX scripts only where missing
+        tmp_path = zip_path.with_suffix(".tmp")
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf_out:
+            for item in zf.infolist():
+                if item.filename in exe_set:
+                    continue
+                zf_out.writestr(item, zf.read(item.filename))
+
+            for exe in exe_names:
+                stem = PurePosixPath(exe).stem
+                if stem in existing_posix or stem not in scripts:
+                    continue
+                module, func = scripts[stem]
+                script = (
+                    f"#!/usr/bin/env python3\n"
+                    f"# -*- coding: utf-8 -*-\n"
+                    f"import sys\n"
+                    f"from {module} import {func}\n"
+                    f'if __name__ == "__main__":\n'
+                    f"    sys.exit({func}())\n"
+                )
+                info = zipfile.ZipInfo(f"bin/{stem}")
+                perms = stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH
+                info.external_attr = perms << 16
+                zf_out.writestr(info, script)
+
+    tmp_path.replace(zip_path)
 
 
 def _create_iam_role(
@@ -352,8 +426,7 @@ def _create_iam_role(
                     "logs:DescribeLogStreams",
                 ],
                 "Resource": (
-                    f"arn:aws:logs:*:{account_id}"
-                    ":log-group:/aws/bedrock-agentcore/runtimes/*"
+                    f"arn:aws:logs:*:{account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"
                 ),
             },
             {
@@ -389,9 +462,7 @@ def _create_iam_role(
                 "Effect": "Allow",
                 "Action": "cloudwatch:PutMetricData",
                 "Resource": "*",
-                "Condition": {
-                    "StringEquals": {"cloudwatch:namespace": "bedrock-agentcore"}
-                },
+                "Condition": {"StringEquals": {"cloudwatch:namespace": "bedrock-agentcore"}},
             },
             # Workload Identity
             {
