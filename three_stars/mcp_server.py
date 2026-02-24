@@ -25,7 +25,7 @@ def _find_sss() -> str:
 
 async def _run(args: list[str]) -> str:
     """Run ``sss <args>`` and return combined stdout+stderr."""
-    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb"}
+    env = {**os.environ, "NO_COLOR": "1", "TERM": "dumb", "PYTHONUTF8": "1"}
     proc = await asyncio.create_subprocess_exec(
         _find_sss(),
         *args,

@@ -51,7 +51,7 @@ Repository = "https://github.com/icoxfog417/three-stars"
 Issues = "https://github.com/icoxfog417/three-stars/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["three_stars"]
+packages = ["three_stars", "three_stars_templates"]
 
 [tool.ruff]
 target-version = "py312"

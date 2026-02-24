@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 _TEMPLATE_DIR = str(
-    Path(__file__).resolve().parent.parent.parent / "templates" / "starter" / "agent"
+    Path(__file__).resolve().parent.parent.parent / "three_stars_templates" / "starter" / "agent"
 )
 
 

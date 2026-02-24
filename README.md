@@ -37,7 +37,7 @@ Add this to your Claude Code MCP settings.
   "mcpServers": {
     "three-stars": {
       "command": "uvx",
-      "args": ["three-stars-mcp"]
+      "args": ["--from", "three-stars", "three-stars-mcp"]
     }
   }
 }
