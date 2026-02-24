@@ -21,7 +21,7 @@ from strands import Agent
 from strands.tools.mcp import MCPClient
 
 _TEMPLATE_DIR = str(
-    Path(__file__).resolve().parent.parent.parent / "templates" / "starter" / "agent"
+    Path(__file__).resolve().parent.parent.parent / "three_stars_templates" / "starter" / "agent"
 )
 _MCP_JSON_PATH = Path(_TEMPLATE_DIR) / "mcp.json"
 

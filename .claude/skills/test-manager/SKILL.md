@@ -87,7 +87,7 @@ When invoked, follow this procedure:
 1. **Scan** — identify which feature type changed (resource / orchestration / template)
    - Check `three_stars/resources/` for resource modules
    - Check `three_stars/deploy.py` and `three_stars/destroy.py` for orchestration
-   - Check `templates/starter/agent/` for template code
+   - Check `three_stars_templates/starter/agent/` for template code
 
 2. **Check** — compare existing tests against the required checklist above
    - For each resource module, verify the 6 required test functions exist
