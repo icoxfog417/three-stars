@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import shutil
+import time
 import uuid
 
 import boto3
@@ -127,9 +128,13 @@ class TestInvoke:
 
 class TestStatus:
     def test_runtime_ready(self, aws_ctx, deployed_state):
-        rows = agentcore.get_status(aws_ctx, deployed_state)
-        runtime_row = rows[0]
-        assert "Ready" in runtime_row.status
+        # Runtime may still be UPDATING after deploy; poll until READY.
+        for _ in range(30):
+            rows = agentcore.get_status(aws_ctx, deployed_state)
+            if "Ready" in rows[0].status:
+                break
+            time.sleep(10)
+        assert "Ready" in rows[0].status
 
     def test_endpoint_ready(self, aws_ctx, deployed_state):
         rows = agentcore.get_status(aws_ctx, deployed_state)

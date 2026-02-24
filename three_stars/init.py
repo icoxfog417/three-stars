@@ -12,14 +12,18 @@ console = Console()
 TEMPLATES_DIR = Path(__file__).parent.parent / "three_stars_templates"
 
 
-def run_init(name: str, template: str = "starter") -> None:
+def run_init(name: str, template: str = "starter", base_dir: Path | None = None) -> None:
     """Scaffold a new three-stars project.
 
     Args:
         name: Project name (also used as directory name).
         template: Template to use.
+        base_dir: Parent directory where the project folder will be created.
+            Defaults to the current working directory.
     """
-    target_dir = Path.cwd() / name
+    if base_dir is None:
+        base_dir = Path.cwd()
+    target_dir = Path(base_dir) / name
 
     if target_dir.exists():
         raise FileExistsError(f"Directory '{name}' already exists.")
