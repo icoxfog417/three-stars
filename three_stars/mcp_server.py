@@ -53,15 +53,28 @@ async def _run_sync(func, consoles=None):
     return result, captured
 
 
+def _require_absolute(path: str, param_name: str) -> str:
+    """Validate that a path is absolute. Raise ValueError if relative."""
+    from pathlib import Path
+
+    if not Path(path).is_absolute():
+        raise ValueError(
+            f"'{param_name}' must be an absolute path (got '{path}'). "
+            f"Relative paths like '.' cannot be resolved because the MCP server's "
+            f"working directory differs from the client's."
+        )
+    return path
+
+
 @mcp.tool()
 async def sss_init(
     base_dir: Annotated[
         str,
         Field(
-            description="Parent directory where the project folder will be created. "
-            "Defaults to the current working directory."
+            description="Absolute path to the parent directory where the project folder "
+            "will be created. Example: '/home/user/projects'."
         ),
-    ] = ".",
+    ],
     name: Annotated[
         str,
         Field(description="Project name, also used as the directory name."),
@@ -81,14 +94,14 @@ async def sss_init(
 
     from three_stars import init as init_mod
 
-    resolved_base_dir = Path(base_dir).resolve()
+    base_dir = _require_absolute(base_dir, "base_dir")
 
     try:
         _, output = await _run_sync(
-            partial(init_mod.run_init, name=name, template=template, base_dir=resolved_base_dir),
+            partial(init_mod.run_init, name=name, template=template, base_dir=Path(base_dir)),
             consoles=[(init_mod, "console")],
         )
-        return output or f"Project '{name}' created successfully at {resolved_base_dir / name}."
+        return output or f"Project '{name}' created successfully at {Path(base_dir) / name}."
     except Exception as e:
         return f"Error: {e}"
 
@@ -97,8 +110,11 @@ async def sss_init(
 async def sss_deploy(
     project_dir: Annotated[
         str,
-        Field(description="Path to the three-stars project directory containing three-stars.yml."),
-    ] = ".",
+        Field(
+            description="Absolute path to the three-stars project directory "
+            "containing three-stars.yml. Example: '/home/user/projects/my-ai-app'."
+        ),
+    ],
     region: Annotated[
         str | None,
         Field(description="AWS region override (e.g. 'us-west-2'). Defaults to config value."),
@@ -128,6 +144,8 @@ async def sss_deploy(
     """
     from three_stars import deploy as deploy_mod
     from three_stars.config import load_config
+
+    project_dir = _require_absolute(project_dir, "project_dir")
 
     try:
         config = load_config(project_dir, region_override=region)
@@ -164,8 +182,11 @@ async def sss_deploy(
 async def sss_status(
     project_dir: Annotated[
         str,
-        Field(description="Path to the three-stars project directory containing three-stars.yml."),
-    ] = ".",
+        Field(
+            description="Absolute path to the three-stars project directory "
+            "containing three-stars.yml. Example: '/home/user/projects/my-ai-app'."
+        ),
+    ],
     region: Annotated[
         str | None,
         Field(description="AWS region override (e.g. 'us-west-2'). Defaults to config value."),
@@ -193,6 +214,8 @@ async def sss_status(
     """
     from three_stars import status as status_mod
 
+    project_dir = _require_absolute(project_dir, "project_dir")
+
     try:
         config = None
         if sync:
@@ -219,8 +242,11 @@ async def sss_status(
 async def sss_destroy(
     project_dir: Annotated[
         str,
-        Field(description="Path to the three-stars project directory containing three-stars.yml."),
-    ] = ".",
+        Field(
+            description="Absolute path to the three-stars project directory "
+            "containing three-stars.yml. Example: '/home/user/projects/my-ai-app'."
+        ),
+    ],
     region: Annotated[
         str | None,
         Field(description="AWS region for resource lookup when no state file exists."),
@@ -253,6 +279,8 @@ async def sss_destroy(
     to discover resources from AWS before destroying.
     """
     from three_stars import destroy as destroy_mod
+
+    project_dir = _require_absolute(project_dir, "project_dir")
 
     try:
         _, output = await _run_sync(
