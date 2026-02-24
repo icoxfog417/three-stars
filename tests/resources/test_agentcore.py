@@ -7,6 +7,7 @@ live in tests/integration/test_agentcore.py.
 
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -245,6 +246,80 @@ class TestDestroyIdempotent:
             mock_mem_cls.return_value = memory_client
             # Should not raise
             agentcore.destroy(ctx, state)
+
+
+class TestFixWindowsEntrypoints:
+    """_fix_windows_entrypoints replaces .exe launchers with POSIX scripts."""
+
+    def test_replaces_exe_with_posix_script(self, tmp_path):
+        zip_path = tmp_path / "agent.zip"
+        entry_points = (
+            "[console_scripts]\n"
+            "opentelemetry-instrument = "
+            "opentelemetry.instrumentation.auto_instrumentation:run_distro\n"
+        )
+        dist_info = "opentelemetry_instrumentation-0.50.dist-info"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("bin/opentelemetry-instrument.exe", b"MZ fake exe")
+            zf.writestr(f"{dist_info}/entry_points.txt", entry_points)
+            zf.writestr("agent.py", "pass")
+
+        agentcore._fix_windows_entrypoints(zip_path)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "bin/opentelemetry-instrument.exe" not in names
+            assert "bin/opentelemetry-instrument" in names
+            assert "agent.py" in names
+            script = zf.read("bin/opentelemetry-instrument").decode()
+            assert "#!/usr/bin/env python3" in script
+            assert "from opentelemetry.instrumentation.auto_instrumentation" in script
+            assert "import run_distro" in script
+            assert "sys.exit(run_distro())" in script
+            # Check executable permission
+            info = zf.getinfo("bin/opentelemetry-instrument")
+            unix_mode = (info.external_attr >> 16) & 0o777
+            assert unix_mode & 0o755 == 0o755
+
+    def test_skips_when_posix_script_already_exists(self, tmp_path):
+        """When both .exe and POSIX scripts exist, keep original POSIX and drop .exe."""
+        zip_path = tmp_path / "agent.zip"
+        entry_points = (
+            "[console_scripts]\n"
+            "opentelemetry-instrument = "
+            "opentelemetry.instrumentation.auto_instrumentation:run\n"
+        )
+        original_script = (
+            "#!/usr/bin/env python3\nimport sys\n"
+            "from opentelemetry.instrumentation.auto_instrumentation import run\n"
+            "sys.exit(run())\n"
+        )
+        dist_info = "otel-0.50.dist-info"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("bin/opentelemetry-instrument", original_script)
+            zf.writestr("bin/opentelemetry-instrument.exe", b"MZ fake exe")
+            zf.writestr(f"{dist_info}/entry_points.txt", entry_points)
+
+        agentcore._fix_windows_entrypoints(zip_path)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            assert "bin/opentelemetry-instrument.exe" not in names
+            # Should have exactly one entry, not a duplicate
+            assert names.count("bin/opentelemetry-instrument") == 1
+            # Content should be the original script, not regenerated
+            assert zf.read("bin/opentelemetry-instrument").decode() == original_script
+
+    def test_noop_when_no_exe(self, tmp_path):
+        zip_path = tmp_path / "agent.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("bin/opentelemetry-instrument", "#!/usr/bin/env python3\npass")
+            zf.writestr("agent.py", "pass")
+
+        agentcore._fix_windows_entrypoints(zip_path)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            assert "bin/opentelemetry-instrument" in zf.namelist()
 
 
 class TestGetStatus:
