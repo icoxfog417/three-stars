@@ -55,6 +55,13 @@ async def _run_sync(func, consoles=None):
 
 @mcp.tool()
 async def sss_init(
+    base_dir: Annotated[
+        str,
+        Field(
+            description="Parent directory where the project folder will be created. "
+            "Defaults to the current working directory."
+        ),
+    ] = ".",
     name: Annotated[
         str,
         Field(description="Project name, also used as the directory name."),
@@ -70,14 +77,18 @@ async def sss_init(
     directory, and an agent/ directory with a starter Bedrock agent.
     The project is ready to deploy with sss_deploy after creation.
     """
+    from pathlib import Path
+
     from three_stars import init as init_mod
+
+    resolved_base_dir = Path(base_dir).resolve()
 
     try:
         _, output = await _run_sync(
-            partial(init_mod.run_init, name=name, template=template),
+            partial(init_mod.run_init, name=name, template=template, base_dir=resolved_base_dir),
             consoles=[(init_mod, "console")],
         )
-        return output or f"Project '{name}' created successfully."
+        return output or f"Project '{name}' created successfully at {resolved_base_dir / name}."
     except Exception as e:
         return f"Error: {e}"
 
